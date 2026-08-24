@@ -1,7 +1,7 @@
 {
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!assets/|dinesh_reddy.jpg|sitemap.xml|robots.txt|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]
