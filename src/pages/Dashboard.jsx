@@ -46,16 +46,16 @@ export default function Dashboard() {
 
   const allMembers = useMemo(() => analytics?.membersList || [], [analytics]);
 
-  // Filter members by selected payment mode
+  // 1. Payment Mode Filter
   const paymentFilteredMembers = useMemo(() => {
     if (paymentModeFilter === 'ALL') return allMembers;
     return allMembers.filter((m) => {
-      const mode = (m.payment_mode || 'UPI').toUpperCase();
+      const mode = String(m.payment_mode || 'UPI').trim().toUpperCase();
       return mode === paymentModeFilter;
     });
   }, [allMembers, paymentModeFilter]);
 
-  // Filter members according to selected timeframe & payment mode
+  // 2. Time Horizon Filter
   const currentMembersInPeriod = useMemo(() => {
     const now = new Date();
     const todayStr = toLocalDateString(now);
@@ -81,34 +81,7 @@ export default function Dashboard() {
     });
   }, [paymentFilteredMembers, selectedPeriod]);
 
-  // Dynamic calculations adjusted for payment mode filter
-  const overall = useMemo(() => {
-    let collected = 0;
-    let dues = 0;
-    let billed = 0;
-
-    paymentFilteredMembers.forEach((m) => {
-      const paid = Number(m.amount_paid) || 0;
-      const total = Number(m.total_amount) || paid;
-      collected += paid;
-      billed += total;
-      dues += Math.max(0, total - paid);
-    });
-
-    const efficiency = billed > 0 ? Math.round((collected / billed) * 100) : 100;
-    const momGrowth = analytics?.overall?.momGrowthPercentage || 0;
-
-    return {
-      totalCollected: collected,
-      totalPendingDues: dues,
-      totalBilled: billed,
-      totalMembers: paymentFilteredMembers.length,
-      momGrowthPercentage: momGrowth,
-      collectionEfficiency: efficiency
-    };
-  }, [paymentFilteredMembers, analytics]);
-
-  // Periodic metrics adjusted for payment mode filter
+  // 3. Dynamic Financial Metrics for the Top 4 Cards
   const currentPeriodMetrics = useMemo(() => {
     let collected = 0;
     let dues = 0;
@@ -140,7 +113,34 @@ export default function Dashboard() {
     };
   }, [currentMembersInPeriod, selectedPeriod]);
 
-  // Dynamic plan yield based on payment filter
+  // 4. Overall Lifetime Metrics
+  const overall = useMemo(() => {
+    let collected = 0;
+    let dues = 0;
+    let billed = 0;
+
+    paymentFilteredMembers.forEach((m) => {
+      const paid = Number(m.amount_paid) || 0;
+      const total = Number(m.total_amount) || paid;
+      collected += paid;
+      billed += total;
+      dues += Math.max(0, total - paid);
+    });
+
+    const efficiency = billed > 0 ? Math.round((collected / billed) * 100) : 100;
+    const momGrowth = analytics?.overall?.momGrowthPercentage || 0;
+
+    return {
+      totalCollected: collected,
+      totalPendingDues: dues,
+      totalBilled: billed,
+      totalMembers: paymentFilteredMembers.length,
+      momGrowthPercentage: momGrowth,
+      collectionEfficiency: efficiency
+    };
+  }, [paymentFilteredMembers, analytics]);
+
+  // 5. Dynamic Plan Yield
   const planYieldBarData = useMemo(() => {
     const counts = {
       DAILY: 0,
@@ -173,14 +173,44 @@ export default function Dashboard() {
     ];
   }, [paymentFilteredMembers]);
 
-  // Chart Data Structuring
+  // 6. Pie Chart Breakdown
   const revenueVsDuesPieData = [
     { name: 'Collected Revenue', value: Number(overall.totalCollected), color: '#10B981' },
     { name: 'Pending Dues', value: Number(overall.totalPendingDues), color: '#F43F5E' }
   ];
 
-  const growthTrend = analytics?.growthTrend || [];
+  // 7. Dynamic Growth Trend
+  const growthTrend = useMemo(() => {
+    const now = new Date();
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const trend = [];
 
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const targetYear = d.getFullYear();
+      const targetMonth = d.getMonth();
+
+      let monthRevenue = 0;
+      let monthNewMembers = 0;
+
+      paymentFilteredMembers.forEach((m) => {
+        const join = new Date(m.start_date || m.created_at);
+        if (join.getFullYear() === targetYear && join.getMonth() === targetMonth) {
+          monthRevenue += Number(m.amount_paid) || 0;
+          monthNewMembers++;
+        }
+      });
+
+      trend.push({
+        month: `${monthNames[targetMonth]} ${String(targetYear).slice(2)}`,
+        revenue: monthRevenue,
+        newMembers: monthNewMembers
+      });
+    }
+    return trend;
+  }, [paymentFilteredMembers]);
+
+  // 8. Period Comparison Bar Chart
   const periodicComparisonData = useMemo(() => {
     const calcWindow = (days) => {
       const now = new Date();
@@ -199,20 +229,13 @@ export default function Dashboard() {
       return { collected: c, dues: d };
     };
 
-    const tToday = calcWindow(1);
-    const t7 = calcWindow(7);
-    const t30 = calcWindow(30);
-    const t90 = calcWindow(90);
-    const t180 = calcWindow(180);
-    const t365 = calcWindow(365);
-
     return [
-      { name: 'Today', Collected: tToday.collected, Dues: tToday.dues },
-      { name: '7 Days', Collected: t7.collected, Dues: t7.dues },
-      { name: '30 Days', Collected: t30.collected, Dues: t30.dues },
-      { name: '90 Days', Collected: t90.collected, Dues: t90.dues },
-      { name: '180 Days', Collected: t180.collected, Dues: t180.dues },
-      { name: '1 Year', Collected: t365.collected, Dues: t365.dues }
+      { name: 'Today', Collected: calcWindow(1).collected, Dues: calcWindow(1).dues },
+      { name: '7 Days', Collected: calcWindow(7).collected, Dues: calcWindow(7).dues },
+      { name: '30 Days', Collected: calcWindow(30).collected, Dues: calcWindow(30).dues },
+      { name: '90 Days', Collected: calcWindow(90).collected, Dues: calcWindow(90).dues },
+      { name: '180 Days', Collected: calcWindow(180).collected, Dues: calcWindow(180).dues },
+      { name: '1 Year', Collected: calcWindow(365).collected, Dues: calcWindow(365).dues }
     ];
   }, [paymentFilteredMembers]);
 
@@ -272,7 +295,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-6 sm:space-y-8 max-w-7xl mx-auto pb-14 overflow-x-hidden px-1 sm:px-0">
       
-      {/* 🚀 Top Banner with Growth Velocity Badge */}
+      {/* 🚀 Top Banner */}
       <div className="relative rounded-3xl p-5 sm:p-8 bg-gradient-to-r from-[#00F2FE]/20 via-[#7928CA]/20 to-[#FF0080]/20 border border-white/15 shadow-2xl overflow-hidden">
         <div className="absolute -right-10 -bottom-10 w-72 h-72 bg-gradient-to-tr from-[#00F2FE]/15 to-[#FF0080]/15 rounded-full blur-3xl pointer-events-none"></div>
 
@@ -326,7 +349,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             {/* 💳 Payment Mode Filter Dropdown */}
             <div className="flex items-center gap-1.5 bg-[#0B0F19] px-3 py-1.5 rounded-2xl border border-white/10">
-              <span className="text-[10px] text-slate-400 uppercase font-bold">Mode:</span>
+              <span className="text-[10px] text-slate-400 uppercase font-bold">Channel:</span>
               <select
                 value={paymentModeFilter}
                 onChange={(e) => setPaymentModeFilter(e.target.value)}
@@ -361,7 +384,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 💰 Periodic Metric Cards */}
+      {/* 💰 Metric Cards: Correctly Tied to Selected Timeframe & Channel */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <div className="bg-[#0B0F19] p-5 sm:p-6 rounded-3xl border border-emerald-500/30 relative overflow-hidden shadow-xl group hover:border-emerald-500/60 transition-all">
           <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-full blur-2xl group-hover:scale-125 transition-transform pointer-events-none"></div>
@@ -375,7 +398,7 @@ export default function Dashboard() {
             ₹{Number(currentPeriodMetrics.collected).toLocaleString('en-IN')}
           </h3>
           <p className="text-[11px] text-slate-400 mt-2">
-            Verified {paymentModeFilter === 'ALL' ? 'Cash & UPI' : paymentModeFilter} payments
+            Verified {paymentModeFilter === 'ALL' ? 'Cash & UPI' : paymentModeFilter} intake
           </p>
         </div>
 
@@ -422,7 +445,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 📈 SECTION 1: GYM GROWTH CURVE & REVENUE VELOCITY (AREA CHART) */}
+      {/* 📈 SECTION 1: GROWTH CURVE */}
       <div className="bg-[#0B0F19] p-5 sm:p-7 rounded-3xl border border-white/10 shadow-2xl space-y-4">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
           <div>
@@ -433,7 +456,7 @@ export default function Dashboard() {
               </h2>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Tracks continuous monthly income progression and new member onboarding velocity.
+              Tracks continuous monthly income progression ({paymentModeFilter === 'ALL' ? 'All Channels' : paymentModeFilter}).
             </p>
           </div>
 
@@ -475,7 +498,7 @@ export default function Dashboard() {
       {/* 📊 SECTION 2: COMPARATIVE CHARTS GRID */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        {/* Chart A: Collected Revenue vs Pending Dues (Grouped Bar Chart) */}
+        {/* Chart A: Grouped Bar Chart */}
         <div className="lg:col-span-7 bg-[#0B0F19] p-5 sm:p-7 rounded-3xl border border-white/10 shadow-2xl space-y-4">
           <div>
             <h2 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
@@ -501,7 +524,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Chart B: Cash Realization & Collection Efficiency (Donut Chart) */}
+        {/* Chart B: Donut Gauge */}
         <div className="lg:col-span-5 bg-[#0B0F19] p-5 sm:p-7 rounded-3xl border border-white/10 shadow-2xl flex flex-col justify-between space-y-4">
           <div>
             <h2 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
@@ -530,7 +553,6 @@ export default function Dashboard() {
               </PieChart>
             </ResponsiveContainer>
 
-            {/* Inner Gauge Text */}
             <div className="absolute text-center pointer-events-none">
               <span className="text-2xl font-black text-white font-mono">{overall.collectionEfficiency}%</span>
               <span className="text-[9px] uppercase font-bold text-emerald-400 block">Realized</span>
@@ -551,10 +573,10 @@ export default function Dashboard() {
 
       </div>
 
-      {/* 📊 SECTION 3: PLAN-WISE REVENUE & ENROLLED ROSTER */}
+      {/* 📊 SECTION 3: PLAN-WISE REVENUE & ROSTER */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        {/* Plan Yield Financial Bar Chart */}
+        {/* Plan Yield */}
         <div className="lg:col-span-5 bg-[#0B0F19] p-5 sm:p-7 rounded-3xl border border-white/10 shadow-2xl space-y-4">
           <div>
             <h2 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
@@ -580,10 +602,9 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* 📋 REDESIGNED RESPONSIVE & OVERFLOW-FREE ACTIVE HORIZON ROSTER */}
+        {/* Responsive Active Horizon Roster */}
         <div className="lg:col-span-7 bg-[#0B0F19] p-5 sm:p-7 rounded-3xl border border-white/10 shadow-2xl flex flex-col justify-between space-y-4">
           
-          {/* Header */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-white/10">
             <div>
               <div className="flex items-center gap-2">
@@ -604,7 +625,7 @@ export default function Dashboard() {
             </button>
           </div>
 
-          {/* 📱 1. Mobile Card Layout (< 768px) - 100% Responsive & Zero Overflow */}
+          {/* Mobile Cards (< 768px) */}
           <div className="block md:hidden space-y-3">
             {currentMembersInPeriod.length === 0 ? (
               <div className="p-8 text-center bg-black/40 rounded-2xl border border-white/5 text-slate-500 font-bold text-xs">
@@ -613,12 +634,10 @@ export default function Dashboard() {
             ) : (
               currentMembersInPeriod.slice(0, 6).map((m) => {
                 const due = Number(m.balance_due) || 0;
-                const mode = (m.payment_mode || 'UPI').toUpperCase();
+                const mode = String(m.payment_mode || 'UPI').trim().toUpperCase();
 
                 return (
                   <div key={m.id} className="bg-black/50 p-4 rounded-2xl border border-white/10 space-y-3 shadow-md hover:border-[#00F2FE]/30 transition-all">
-                    
-                    {/* Top Row: Name & Channel Pill */}
                     <div className="flex justify-between items-start">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#00F2FE]/20 to-[#7928CA]/20 border border-white/10 flex items-center justify-center font-black text-xs text-[#00F2FE] flex-shrink-0">
@@ -641,7 +660,6 @@ export default function Dashboard() {
                       </span>
                     </div>
 
-                    {/* Financial Summary Row */}
                     <div className="grid grid-cols-2 gap-2 bg-black/40 p-2.5 rounded-xl border border-white/5 text-xs">
                       <div>
                         <span className="text-[9px] text-slate-500 uppercase font-bold block">Paid Amount</span>
@@ -657,19 +675,17 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {/* Date Timeline Footer */}
                     <div className="flex justify-between items-center text-[10px] text-slate-400 pt-1 border-t border-white/5 font-mono">
                       <span>Joined: <strong className="text-slate-200">{formatDate(m.start_date || m.created_at)}</strong></span>
                       <span>Expires: <strong className="text-amber-300">{formatDate(m.expiry_date)}</strong></span>
                     </div>
-
                   </div>
                 );
               })
             )}
           </div>
 
-          {/* 🖥️ 2. Desktop High-Density Table (>= 768px) */}
+          {/* Desktop Table (>= 768px) */}
           <div className="hidden md:block overflow-hidden rounded-2xl border border-white/10 bg-black/30">
             <table className="w-full text-left text-xs">
               <thead className="bg-white/5 text-[10px] uppercase tracking-wider text-slate-400 font-bold border-b border-white/10">
@@ -693,7 +709,7 @@ export default function Dashboard() {
                 ) : (
                   currentMembersInPeriod.slice(0, 6).map((m) => {
                     const due = Number(m.balance_due) || 0;
-                    const mode = (m.payment_mode || 'UPI').toUpperCase();
+                    const mode = String(m.payment_mode || 'UPI').trim().toUpperCase();
 
                     return (
                       <tr key={m.id} className="hover:bg-white/[0.02] transition-colors">
@@ -713,8 +729,8 @@ export default function Dashboard() {
                         <td className="py-3 px-3">
                           <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border whitespace-nowrap ${
                             mode === 'CASH'
-                              ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-                              : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                              : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
                           }`}>
                             {mode === 'CASH' ? '💵 Cash' : '📱 UPI'}
                           </span>
