@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useMemo } from 'react';
 import API from '../services/api';
 import { AuthContext } from '../context/AuthContext';
 import { formatDate } from '../utils/dateFormatter';
@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedPeriod, setSelectedPeriod] = useState('daily');
+  const [paymentModeFilter, setPaymentModeFilter] = useState('ALL'); // 'ALL', 'CASH', 'UPI'
 
   const fetchAnalytics = async () => {
     try {
@@ -43,37 +44,23 @@ export default function Dashboard() {
     return `${year}-${month}-${day}`;
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center text-xs font-black text-slate-400 tracking-widest uppercase">
-        Loading Visual Intelligence & Charts...
-      </div>
-    );
-  }
+  const allMembers = useMemo(() => analytics?.membersList || [], [analytics]);
 
-  const overall = analytics?.overall || { 
-    totalCollected: 0, 
-    totalPendingDues: 0, 
-    totalBilled: 0, 
-    totalMembers: 0, 
-    activeMembers: 0, 
-    expiredMembers: 0,
-    momGrowthPercentage: 0,
-    collectionEfficiency: 100
-  };
+  // Filter members by selected payment mode
+  const paymentFilteredMembers = useMemo(() => {
+    if (paymentModeFilter === 'ALL') return allMembers;
+    return allMembers.filter((m) => {
+      const mode = (m.payment_mode || 'UPI').toUpperCase();
+      return mode === paymentModeFilter;
+    });
+  }, [allMembers, paymentModeFilter]);
 
-  const growthTrend = analytics?.growthTrend || [];
-  const periodData = analytics?.periodRevenue || {};
-  const currentPeriodMetrics = periodData[selectedPeriod] || { label: 'Current', collected: 0, dues: 0, billed: 0, count: 0 };
-  const planRev = analytics?.planRevenueMap || {};
-  const allMembers = analytics?.membersList || [];
-
-  // Filter members according to selected timeframe
-  const getFilteredMembers = () => {
+  // Filter members according to selected timeframe & payment mode
+  const currentMembersInPeriod = useMemo(() => {
     const now = new Date();
     const todayStr = toLocalDateString(now);
 
-    return allMembers.filter(m => {
+    return paymentFilteredMembers.filter((m) => {
       const joinDate = m.start_date || m.created_at;
       const joinDateStr = toLocalDateString(joinDate);
       const createdDateStr = toLocalDateString(m.created_at);
@@ -92,29 +79,99 @@ export default function Dashboard() {
       if (selectedPeriod === 'annually') return diffDays >= 0 && diffDays <= 365;
       return true;
     });
-  };
+  }, [paymentFilteredMembers, selectedPeriod]);
 
-  const currentMembersInPeriod = getFilteredMembers();
+  // Dynamic calculations adjusted for payment mode filter
+  const overall = useMemo(() => {
+    let collected = 0;
+    let dues = 0;
+    let billed = 0;
 
-  // Export handlers
-  const handleExportPDF = () => {
-    exportToPDF({
-      gymName: user?.gym_name || 'Pulse Fit Facility',
-      ownerName: user?.gym_owner_name || user?.name,
-      timeRangeLabel: currentPeriodMetrics.label,
-      metrics: currentPeriodMetrics,
-      members: currentMembersInPeriod.length > 0 ? currentMembersInPeriod : allMembers
+    paymentFilteredMembers.forEach((m) => {
+      const paid = Number(m.amount_paid) || 0;
+      const total = Number(m.total_amount) || paid;
+      collected += paid;
+      billed += total;
+      dues += Math.max(0, total - paid);
     });
-  };
 
-  const handleExportExcel = () => {
-    exportToExcel({
-      gymName: user?.gym_name || 'Pulse Fit Facility',
-      timeRangeLabel: currentPeriodMetrics.label,
-      metrics: currentPeriodMetrics,
-      members: currentMembersInPeriod.length > 0 ? currentMembersInPeriod : allMembers
+    const efficiency = billed > 0 ? Math.round((collected / billed) * 100) : 100;
+    const momGrowth = analytics?.overall?.momGrowthPercentage || 0;
+
+    return {
+      totalCollected: collected,
+      totalPendingDues: dues,
+      totalBilled: billed,
+      totalMembers: paymentFilteredMembers.length,
+      momGrowthPercentage: momGrowth,
+      collectionEfficiency: efficiency
+    };
+  }, [paymentFilteredMembers, analytics]);
+
+  // Periodic metrics adjusted for payment mode filter
+  const currentPeriodMetrics = useMemo(() => {
+    let collected = 0;
+    let dues = 0;
+    let billed = 0;
+
+    currentMembersInPeriod.forEach((m) => {
+      const paid = Number(m.amount_paid) || 0;
+      const total = Number(m.total_amount) || paid;
+      collected += paid;
+      billed += total;
+      dues += Math.max(0, total - paid);
     });
-  };
+
+    const periodLabels = {
+      daily: 'Today',
+      weekly: 'Last 7 Days',
+      monthly: 'Last 30 Days',
+      quarterly: 'Last 90 Days',
+      halfYearly: 'Last 180 Days',
+      annually: 'Last 365 Days'
+    };
+
+    return {
+      label: periodLabels[selectedPeriod] || 'Selected Period',
+      collected,
+      dues,
+      billed,
+      count: currentMembersInPeriod.length
+    };
+  }, [currentMembersInPeriod, selectedPeriod]);
+
+  // Dynamic plan yield based on payment filter
+  const planYieldBarData = useMemo(() => {
+    const counts = {
+      DAILY: 0,
+      MONTHLY: 0,
+      '2_MONTHS': 0,
+      QUARTERLY: 0,
+      HALF_YEARLY: 0,
+      ANNUAL: 0,
+      CUSTOM: 0
+    };
+
+    paymentFilteredMembers.forEach((m) => {
+      const plan = m.plan_type || 'MONTHLY';
+      const paid = Number(m.amount_paid) || 0;
+      if (counts[plan] !== undefined) {
+        counts[plan] += paid;
+      } else {
+        counts.CUSTOM += paid;
+      }
+    });
+
+    return [
+      { name: 'Daily', revenue: counts.DAILY },
+      { name: '1 Mo', revenue: counts.MONTHLY },
+      { name: '2 Mos', revenue: counts['2_MONTHS'] },
+      { name: '3 Mos', revenue: counts.QUARTERLY },
+      { name: '6 Mos', revenue: counts.HALF_YEARLY },
+      { name: '1 Yr', revenue: counts.ANNUAL },
+      { name: 'Custom', revenue: counts.CUSTOM }
+    ];
+  }, [paymentFilteredMembers]);
 
   // Chart Data Structuring
   const revenueVsDuesPieData = [
@@ -122,24 +179,42 @@ export default function Dashboard() {
     { name: 'Pending Dues', value: Number(overall.totalPendingDues), color: '#F43F5E' }
   ];
 
-  const planYieldBarData = [
-    { name: 'Daily', revenue: planRev.DAILY || 0 },
-    { name: '1 Mo', revenue: planRev.MONTHLY || 0 },
-    { name: '2 Mos', revenue: planRev['2_MONTHS'] || 0 },
-    { name: '3 Mos', revenue: planRev.QUARTERLY || 0 },
-    { name: '6 Mos', revenue: planRev.HALF_YEARLY || 0 },
-    { name: '1 Yr', revenue: planRev.ANNUAL || 0 },
-    { name: 'Custom', revenue: planRev.CUSTOM || 0 }
-  ];
+  const growthTrend = analytics?.growthTrend || [];
 
-  const periodicComparisonData = [
-    { name: 'Today', Collected: periodData.daily?.collected || 0, Dues: periodData.daily?.dues || 0 },
-    { name: '7 Days', Collected: periodData.weekly?.collected || 0, Dues: periodData.weekly?.dues || 0 },
-    { name: '30 Days', Collected: periodData.monthly?.collected || 0, Dues: periodData.monthly?.dues || 0 },
-    { name: '90 Days', Collected: periodData.quarterly?.collected || 0, Dues: periodData.quarterly?.dues || 0 },
-    { name: '180 Days', Collected: periodData.halfYearly?.collected || 0, Dues: periodData.halfYearly?.dues || 0 },
-    { name: '1 Year', Collected: periodData.annually?.collected || 0, Dues: periodData.annually?.dues || 0 }
-  ];
+  const periodicComparisonData = useMemo(() => {
+    const calcWindow = (days) => {
+      const now = new Date();
+      let c = 0;
+      let d = 0;
+      paymentFilteredMembers.forEach((m) => {
+        const jDate = new Date(m.start_date || m.created_at);
+        const diff = (now.getTime() - jDate.getTime()) / (1000 * 60 * 60 * 24);
+        if (diff >= 0 && diff <= days) {
+          const paid = Number(m.amount_paid) || 0;
+          const total = Number(m.total_amount) || paid;
+          c += paid;
+          d += Math.max(0, total - paid);
+        }
+      });
+      return { collected: c, dues: d };
+    };
+
+    const tToday = calcWindow(1);
+    const t7 = calcWindow(7);
+    const t30 = calcWindow(30);
+    const t90 = calcWindow(90);
+    const t180 = calcWindow(180);
+    const t365 = calcWindow(365);
+
+    return [
+      { name: 'Today', Collected: tToday.collected, Dues: tToday.dues },
+      { name: '7 Days', Collected: t7.collected, Dues: t7.dues },
+      { name: '30 Days', Collected: t30.collected, Dues: t30.dues },
+      { name: '90 Days', Collected: t90.collected, Dues: t90.dues },
+      { name: '180 Days', Collected: t180.collected, Dues: t180.dues },
+      { name: '1 Year', Collected: t365.collected, Dues: t365.dues }
+    ];
+  }, [paymentFilteredMembers]);
 
   const periodButtons = [
     { id: 'daily', label: '⚡ Day Wise (Today)' },
@@ -150,7 +225,25 @@ export default function Dashboard() {
     { id: 'annually', label: '👑 Annually (365D)' }
   ];
 
-  // Custom Chart Tooltip
+  const handleExportPDF = () => {
+    exportToPDF({
+      gymName: user?.gym_name || 'Pulse Fit Facility',
+      ownerName: user?.gym_owner_name || user?.name,
+      timeRangeLabel: `${currentPeriodMetrics.label} (${paymentModeFilter === 'ALL' ? 'All Channels' : paymentModeFilter})`,
+      metrics: currentPeriodMetrics,
+      members: currentMembersInPeriod.length > 0 ? currentMembersInPeriod : paymentFilteredMembers
+    });
+  };
+
+  const handleExportExcel = () => {
+    exportToExcel({
+      gymName: user?.gym_name || 'Pulse Fit Facility',
+      timeRangeLabel: `${currentPeriodMetrics.label} (${paymentModeFilter === 'ALL' ? 'All Channels' : paymentModeFilter})`,
+      metrics: currentPeriodMetrics,
+      members: currentMembersInPeriod.length > 0 ? currentMembersInPeriod : paymentFilteredMembers
+    });
+  };
+
   const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
       return (
@@ -168,8 +261,16 @@ export default function Dashboard() {
     return null;
   };
 
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center text-xs font-black text-slate-400 tracking-widest uppercase">
+        Loading Visual Intelligence & Charts...
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6 sm:space-y-8 max-w-7xl mx-auto pb-14 overflow-x-hidden">
+    <div className="space-y-6 sm:space-y-8 max-w-7xl mx-auto pb-14 overflow-x-hidden px-1 sm:px-0">
       
       {/* 🚀 Top Banner with Growth Velocity Badge */}
       <div className="relative rounded-3xl p-5 sm:p-8 bg-gradient-to-r from-[#00F2FE]/20 via-[#7928CA]/20 to-[#FF0080]/20 border border-white/15 shadow-2xl overflow-hidden">
@@ -196,7 +297,7 @@ export default function Dashboard() {
               {user?.gym_name || 'Pulse Fit Financial Intelligence'}
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 mt-1">
-              Time-series growth curves, dues risk analysis, and visual revenue charts.
+              Time-series growth curves, payment mode breakdowns (Cash/UPI), and visual revenue charts.
             </p>
           </div>
 
@@ -217,13 +318,30 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 🧭 Periodic Filter Navigation Tabs */}
+      {/* 🧭 Periodic Filter Navigation & Payment Mode Filter */}
       <div className="space-y-3">
-        <div className="flex justify-between items-center">
-          <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Select Revenue Time Horizon:</span>
-          <span className="text-[11px] font-bold text-[#00F2FE] bg-[#00F2FE]/10 px-2.5 py-0.5 rounded-full border border-[#00F2FE]/30">
-            Active Filter: {currentPeriodMetrics.label}
-          </span>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Select Revenue Time Horizon & Channel:</span>
+          
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            {/* 💳 Payment Mode Filter Dropdown */}
+            <div className="flex items-center gap-1.5 bg-[#0B0F19] px-3 py-1.5 rounded-2xl border border-white/10">
+              <span className="text-[10px] text-slate-400 uppercase font-bold">Mode:</span>
+              <select
+                value={paymentModeFilter}
+                onChange={(e) => setPaymentModeFilter(e.target.value)}
+                className="bg-transparent text-xs text-[#00F2FE] font-bold outline-none cursor-pointer"
+              >
+                <option value="ALL" className="bg-[#07090E] text-white">All Channels (Cash + UPI)</option>
+                <option value="CASH" className="bg-[#07090E] text-amber-300">💵 Cash Only</option>
+                <option value="UPI" className="bg-[#07090E] text-cyan-300">📱 UPI / Online Only</option>
+              </select>
+            </div>
+
+            <span className="text-[11px] font-bold text-[#00F2FE] bg-[#00F2FE]/10 px-3 py-1.5 rounded-2xl border border-[#00F2FE]/30 whitespace-nowrap">
+              {currentPeriodMetrics.label}
+            </span>
+          </div>
         </div>
 
         <div className="flex bg-[#0B0F19] p-1.5 rounded-2xl border border-white/10 overflow-x-auto max-w-full gap-1.5 scrollbar-none">
@@ -256,7 +374,9 @@ export default function Dashboard() {
           <h3 className="text-2xl sm:text-4xl font-black text-white mt-3 font-mono truncate">
             ₹{Number(currentPeriodMetrics.collected).toLocaleString('en-IN')}
           </h3>
-          <p className="text-[11px] text-slate-400 mt-2">Verified payments received</p>
+          <p className="text-[11px] text-slate-400 mt-2">
+            Verified {paymentModeFilter === 'ALL' ? 'Cash & UPI' : paymentModeFilter} payments
+          </p>
         </div>
 
         <div className="bg-[#0B0F19] p-5 sm:p-6 rounded-3xl border border-rose-500/30 relative overflow-hidden shadow-xl group hover:border-rose-500/60 transition-all">
@@ -361,7 +481,9 @@ export default function Dashboard() {
             <h2 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
               <span>📊</span> Collected Revenue vs. Pending Dues Comparison
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">Realized income versus outstanding balances across time windows.</p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Realized income versus outstanding balances across time windows ({paymentModeFilter === 'ALL' ? 'All Channels' : paymentModeFilter}).
+            </p>
           </div>
 
           <div className="h-64 sm:h-72 w-full pt-2">
@@ -458,63 +580,159 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Member Roster in Active Horizon */}
+        {/* 📋 REDESIGNED RESPONSIVE & OVERFLOW-FREE ACTIVE HORIZON ROSTER */}
         <div className="lg:col-span-7 bg-[#0B0F19] p-5 sm:p-7 rounded-3xl border border-white/10 shadow-2xl flex flex-col justify-between space-y-4">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+          
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-white/10">
             <div>
-              <h2 className="text-base sm:text-lg font-black text-white">
-                Active Horizon Roster ({currentPeriodMetrics.label})
-              </h2>
-              <p className="text-xs text-slate-400">Members enrolled during the selected time period.</p>
+              <div className="flex items-center gap-2">
+                <span className="text-base">📋</span>
+                <h2 className="text-base sm:text-lg font-black text-white">
+                  Active Horizon Roster ({currentPeriodMetrics.label})
+                </h2>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                {currentMembersInPeriod.length} athletes enrolled in {currentPeriodMetrics.label.toLowerCase()} • Channel: <strong className="text-[#00F2FE]">{paymentModeFilter}</strong>
+              </p>
             </div>
             <button
               onClick={() => navigate('/members')}
-              className="text-xs text-[#00F2FE] hover:underline font-bold self-start sm:self-auto"
+              className="text-xs text-[#00F2FE] hover:underline font-bold self-start sm:self-auto flex items-center gap-1 transition-all"
             >
               Full Directory ➔
             </button>
           </div>
 
-          <div className="overflow-x-auto w-full">
-            <table className="w-full text-left border-collapse min-w-[480px]">
-              <thead>
-                <tr className="bg-white/5 text-[10px] uppercase tracking-wider text-slate-400 font-bold">
-                  <th className="p-3 rounded-l-xl">Member Name</th>
-                  <th className="p-3">Plan</th>
-                  <th className="p-3">Paid (₹)</th>
-                  <th className="p-3">Due (₹)</th>
-                  <th className="p-3">Joined (dd/mm/yyyy)</th>
-                  <th className="p-3 rounded-r-xl text-right">Expires</th>
+          {/* 📱 1. Mobile Card Layout (< 768px) - 100% Responsive & Zero Overflow */}
+          <div className="block md:hidden space-y-3">
+            {currentMembersInPeriod.length === 0 ? (
+              <div className="p-8 text-center bg-black/40 rounded-2xl border border-white/5 text-slate-500 font-bold text-xs">
+                No member enrollments recorded during {currentPeriodMetrics.label.toLowerCase()} for {paymentModeFilter === 'ALL' ? 'any channel' : paymentModeFilter}.
+              </div>
+            ) : (
+              currentMembersInPeriod.slice(0, 6).map((m) => {
+                const due = Number(m.balance_due) || 0;
+                const mode = (m.payment_mode || 'UPI').toUpperCase();
+
+                return (
+                  <div key={m.id} className="bg-black/50 p-4 rounded-2xl border border-white/10 space-y-3 shadow-md hover:border-[#00F2FE]/30 transition-all">
+                    
+                    {/* Top Row: Name & Channel Pill */}
+                    <div className="flex justify-between items-start">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[#00F2FE]/20 to-[#7928CA]/20 border border-white/10 flex items-center justify-center font-black text-xs text-[#00F2FE] flex-shrink-0">
+                          {m.full_name?.charAt(0) || '👤'}
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="font-bold text-white text-xs sm:text-sm truncate">{m.full_name}</h4>
+                          <span className="text-[10px] text-[#00F2FE] font-mono font-bold uppercase tracking-wider block">
+                            {m.plan_type}
+                          </span>
+                        </div>
+                      </div>
+
+                      <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border ${
+                        mode === 'CASH'
+                          ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                          : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                      }`}>
+                        {mode === 'CASH' ? '💵 Cash' : '📱 UPI'}
+                      </span>
+                    </div>
+
+                    {/* Financial Summary Row */}
+                    <div className="grid grid-cols-2 gap-2 bg-black/40 p-2.5 rounded-xl border border-white/5 text-xs">
+                      <div>
+                        <span className="text-[9px] text-slate-500 uppercase font-bold block">Paid Amount</span>
+                        <span className="text-emerald-400 font-mono font-bold text-xs">
+                          ₹{Number(m.amount_paid).toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold block">Outstanding Due</span>
+                        <span className={`font-mono font-bold text-xs ${due > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                          {due > 0 ? `₹${due.toLocaleString('en-IN')}` : '₹0 (Paid)'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Date Timeline Footer */}
+                    <div className="flex justify-between items-center text-[10px] text-slate-400 pt-1 border-t border-white/5 font-mono">
+                      <span>Joined: <strong className="text-slate-200">{formatDate(m.start_date || m.created_at)}</strong></span>
+                      <span>Expires: <strong className="text-amber-300">{formatDate(m.expiry_date)}</strong></span>
+                    </div>
+
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* 🖥️ 2. Desktop High-Density Table (>= 768px) */}
+          <div className="hidden md:block overflow-hidden rounded-2xl border border-white/10 bg-black/30">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-white/5 text-[10px] uppercase tracking-wider text-slate-400 font-bold border-b border-white/10">
+                <tr>
+                  <th className="py-3 px-3.5">Athlete</th>
+                  <th className="py-3 px-3">Plan</th>
+                  <th className="py-3 px-3">Channel</th>
+                  <th className="py-3 px-3">Paid (₹)</th>
+                  <th className="py-3 px-3">Due (₹)</th>
+                  <th className="py-3 px-3">Joined</th>
+                  <th className="py-3 px-3.5 text-right">Expires</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5 text-xs">
+              <tbody className="divide-y divide-white/5">
                 {currentMembersInPeriod.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="p-8 text-center text-slate-500 font-bold">
-                      No member enrollments recorded during {currentPeriodMetrics.label.toLowerCase()}.
+                    <td colSpan="7" className="p-8 text-center text-slate-500 font-bold text-xs">
+                      No member enrollments recorded during {currentPeriodMetrics.label.toLowerCase()} for {paymentModeFilter === 'ALL' ? 'any channel' : paymentModeFilter}.
                     </td>
                   </tr>
                 ) : (
                   currentMembersInPeriod.slice(0, 6).map((m) => {
                     const due = Number(m.balance_due) || 0;
+                    const mode = (m.payment_mode || 'UPI').toUpperCase();
+
                     return (
                       <tr key={m.id} className="hover:bg-white/[0.02] transition-colors">
-                        <td className="p-3 font-bold text-white truncate max-w-[140px]">
-                          {m.full_name}
+                        <td className="py-3 px-3.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-[#00F2FE]/20 to-[#7928CA]/20 border border-white/10 flex items-center justify-center font-bold text-[11px] text-[#00F2FE]">
+                              {m.full_name?.charAt(0) || '👤'}
+                            </div>
+                            <span className="font-bold text-white truncate max-w-[130px] block">
+                              {m.full_name}
+                            </span>
+                          </div>
                         </td>
-                        <td className="p-3 text-[#00F2FE] font-bold text-[11px]">
+                        <td className="py-3 px-3 text-[#00F2FE] font-bold text-[11px] uppercase">
                           {m.plan_type}
                         </td>
-                        <td className="p-3 text-emerald-400 font-mono font-bold">
+                        <td className="py-3 px-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border whitespace-nowrap ${
+                            mode === 'CASH'
+                              ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                              : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+                          }`}>
+                            {mode === 'CASH' ? '💵 Cash' : '📱 UPI'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-emerald-400 font-mono font-bold">
                           ₹{Number(m.amount_paid).toLocaleString('en-IN')}
                         </td>
-                        <td className="p-3 font-mono font-bold">
-                          {due > 0 ? <span className="text-rose-400">₹{due.toLocaleString('en-IN')}</span> : <span className="text-slate-500">₹0</span>}
+                        <td className="py-3 px-3 font-mono font-bold">
+                          {due > 0 ? (
+                            <span className="text-rose-400">₹{due.toLocaleString('en-IN')}</span>
+                          ) : (
+                            <span className="text-slate-500 font-normal">₹0</span>
+                          )}
                         </td>
-                        <td className="p-3 font-mono text-slate-300 whitespace-nowrap">
-                          {formatDate(m.start_date)}
+                        <td className="py-3 px-3 font-mono text-slate-300 whitespace-nowrap text-[11px]">
+                          {formatDate(m.start_date || m.created_at)}
                         </td>
-                        <td className="p-3 text-right font-mono text-slate-300 whitespace-nowrap">
+                        <td className="py-3 px-3.5 text-right font-mono text-amber-300/90 whitespace-nowrap text-[11px]">
                           {formatDate(m.expiry_date)}
                         </td>
                       </tr>
@@ -524,6 +742,7 @@ export default function Dashboard() {
               </tbody>
             </table>
           </div>
+
         </div>
 
       </div>

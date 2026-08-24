@@ -1,15 +1,18 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import API from '../services/api';
 import { AuthContext } from '../context/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
 import { formatDate } from '../utils/dateFormatter';
-import { openWhatsAppDueReminder } from '../utils/whatsappHelper';
 
 export default function Members() {
   const { user } = useContext(AuthContext);
   const isSuperAdmin = user?.role === 'ADMIN';
+  const fileInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
 
   const [members, setMembers] = useState([]);
+  const [plans, setPlans] = useState([]);
   const [summary, setSummary] = useState({ 
     total: 0, 
     activeCount: 0, 
@@ -22,6 +25,7 @@ export default function Members() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [planFilter, setPlanFilter] = useState('ALL');
+  const [paymentModeFilter, setPaymentModeFilter] = useState('ALL');
   const [loading, setLoading] = useState(true);
   const [actionMessage, setActionMessage] = useState({ text: '', type: '' });
 
@@ -31,6 +35,11 @@ export default function Members() {
   const [qrMember, setQrMember] = useState(null);
   const [editingMember, setEditingMember] = useState(null);
 
+  // Live Camera State
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [mediaStream, setMediaStream] = useState(null);
+
   const [formData, setFormData] = useState({
     full_name: '',
     email: '',
@@ -39,8 +48,11 @@ export default function Members() {
     dob: '',
     plan_type: 'MONTHLY',
     custom_months: '1',
+    base_price: '',
+    discount: '0',
     total_amount: '',
     amount_paid: '',
+    payment_mode: 'UPI', // Default payment mode
     start_date: new Date().toISOString().split('T')[0],
     expiry_date: '',
     status: 'ACTIVE',
@@ -48,6 +60,15 @@ export default function Members() {
   });
 
   const [formError, setFormError] = useState('');
+
+  const fetchPlans = async () => {
+    try {
+      const res = await API.get('/plans');
+      setPlans(res.data || []);
+    } catch (err) {
+      console.error('Failed to fetch pricing plans:', err);
+    }
+  };
 
   const calculateExpiryDate = (startDateStr, planType, customMonthsVal) => {
     if (!startDateStr) return '';
@@ -67,18 +88,97 @@ export default function Members() {
   };
 
   const handlePlanChange = (newPlan) => {
+    const matchedPlan = plans.find(p => p.plan_type === newPlan);
+    const planBasePrice = matchedPlan ? Number(matchedPlan.price) : 0;
+    const discountVal = Number(formData.discount) || 0;
+    const computedTotal = Math.max(0, planBasePrice - discountVal);
     const updatedExpiry = calculateExpiryDate(formData.start_date, newPlan, formData.custom_months);
-    setFormData((prev) => ({ ...prev, plan_type: newPlan, expiry_date: updatedExpiry }));
+
+    setFormData(prev => ({
+      ...prev,
+      plan_type: newPlan,
+      base_price: planBasePrice > 0 ? planBasePrice : prev.base_price,
+      total_amount: computedTotal > 0 ? computedTotal : prev.total_amount,
+      expiry_date: updatedExpiry
+    }));
   };
 
-  const handleStartDateChange = (newDate) => {
-    const updatedExpiry = calculateExpiryDate(newDate, formData.plan_type, formData.custom_months);
-    setFormData((prev) => ({ ...prev, start_date: newDate, expiry_date: updatedExpiry }));
+  const handleDiscountChange = (discountStr) => {
+    const disc = Number(discountStr) || 0;
+    const base = Number(formData.base_price) || 0;
+    const computedTotal = Math.max(0, base - disc);
+
+    setFormData(prev => ({
+      ...prev,
+      discount: discountStr,
+      total_amount: computedTotal
+    }));
   };
 
-  const handleCustomMonthsChange = (months) => {
-    const updatedExpiry = calculateExpiryDate(formData.start_date, 'CUSTOM', months);
-    setFormData((prev) => ({ ...prev, custom_months: months, expiry_date: updatedExpiry }));
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      setFormError('Image size exceeds 5MB. Please upload a smaller photo.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setFormData(prev => ({ ...prev, photo_url: reader.result }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const startLiveCamera = async () => {
+    setCameraError('');
+    setIsCameraActive(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+      });
+      setMediaStream(stream);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+    } catch (err) {
+      console.error('Camera access error:', err);
+      setCameraError('Unable to access webcam. Check browser permissions.');
+      setIsCameraActive(false);
+    }
+  };
+
+  const stopLiveCamera = () => {
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(track => track.stop());
+      setMediaStream(null);
+    }
+    setIsCameraActive(false);
+  };
+
+  const captureLivePhoto = () => {
+    if (!videoRef.current || !canvasRef.current) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const base64Image = canvas.toDataURL('image/jpeg', 0.85);
+    setFormData(prev => ({ ...prev, photo_url: base64Image }));
+
+    stopLiveCamera();
+  };
+
+  const removePhoto = () => {
+    setFormData(prev => ({ ...prev, photo_url: '' }));
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    stopLiveCamera();
   };
 
   const fetchMembersAndSummary = async () => {
@@ -104,11 +204,24 @@ export default function Members() {
 
   useEffect(() => {
     fetchMembersAndSummary();
+    if (!isSuperAdmin) fetchPlans();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [mediaStream]);
+
   const resetForm = () => {
+    stopLiveCamera();
     const today = new Date().toISOString().split('T')[0];
     const initialExpiry = calculateExpiryDate(today, 'MONTHLY', '1');
+    const monthlyPlan = plans.find(p => p.plan_type === 'MONTHLY');
+    const basePrice = monthlyPlan ? monthlyPlan.price : 1000;
+
     setFormData({
       full_name: '',
       email: '',
@@ -117,13 +230,17 @@ export default function Members() {
       dob: '',
       plan_type: 'MONTHLY',
       custom_months: '1',
-      total_amount: '',
-      amount_paid: '',
+      base_price: basePrice,
+      discount: '0',
+      total_amount: basePrice,
+      amount_paid: basePrice,
+      payment_mode: 'UPI',
       start_date: today,
       expiry_date: initialExpiry,
       status: 'ACTIVE',
       photo_url: ''
     });
+    if (fileInputRef.current) fileInputRef.current.value = '';
     setEditingMember(null);
     setFormError('');
   };
@@ -134,18 +251,22 @@ export default function Members() {
   };
 
   const handleOpenEditModal = (member) => {
+    stopLiveCamera();
     setEditingMember(member);
     setFormError('');
     setFormData({
       full_name: member.full_name,
       email: member.email || '',
       phone: member.phone,
-      gender: member.gender,
+      gender: member.gender || 'MALE',
       dob: member.dob ? member.dob.split('T')[0] : '',
       plan_type: member.plan_type || 'MONTHLY',
       custom_months: member.custom_months ? String(member.custom_months) : '1',
+      base_price: (Number(member.total_amount) || 0) + (Number(member.discount) || 0),
+      discount: member.discount ? String(member.discount) : '0',
       total_amount: member.total_amount || member.amount_paid,
       amount_paid: member.amount_paid,
+      payment_mode: member.payment_mode || 'UPI',
       start_date: member.start_date ? member.start_date.split('T')[0] : '',
       expiry_date: member.expiry_date ? member.expiry_date.split('T')[0] : '',
       status: member.status,
@@ -154,49 +275,23 @@ export default function Members() {
     setIsModalOpen(true);
   };
 
-  const handleImageChange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = (event) => {
-      const img = new Image();
-      img.src = event.target.result;
-      img.onload = () => {
-        const maxDim = 600;
-        let width = img.width;
-        let height = img.height;
-        if (width > height) {
-          if (width > maxDim) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          }
-        } else {
-          if (height > maxDim) {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        setFormData((prev) => ({ ...prev, photo_url: canvas.toDataURL('image/jpeg', 0.85) }));
-      };
-    };
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError('');
+    stopLiveCamera();
 
     try {
       if (editingMember) {
         await API.put(`/members/${editingMember.id}`, formData);
+        setActionMessage({ text: 'Member updated successfully!', type: 'success' });
       } else {
         await API.post('/members', formData);
+        setActionMessage({ 
+          text: formData.email 
+            ? `Member registered! Access QR badge sent directly to ${formData.email}`
+            : `Member registered successfully!`, 
+          type: 'success' 
+        });
       }
       setIsModalOpen(false);
       resetForm();
@@ -216,55 +311,81 @@ export default function Members() {
     }
   };
 
-  // 📧 Send Single Email Due Reminder
-  const handleSendEmailReminder = async (memberId, memberName) => {
+  const sendWhatsAppDueReminder = (member) => {
+    const facility = user?.gym_name || 'Pulse Fit Hub';
+    let cleanPhone = member.phone.replace(/[^0-9]/g, '');
+    if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
+
+    const text = `*Payment Reminder from ${facility.toUpperCase()}*\n\n` +
+      `Hello *${member.full_name}*,\n` +
+      `This is a friendly reminder regarding your pending membership balance at *${facility}*.\n\n` +
+      `📋 *Plan:* ${member.plan_type}\n` +
+      `💰 *Total Agreed Fee:* ₹${Number(member.total_amount).toLocaleString('en-IN')}\n` +
+      `✅ *Amount Paid:* ₹${Number(member.amount_paid).toLocaleString('en-IN')} (${member.payment_mode || 'UPI'})\n` +
+      `⚠️ *Outstanding Balance Due:* ₹${Number(member.balance_due).toLocaleString('en-IN')}\n` +
+      `📅 *Expiration Date:* ${formatDate(member.expiry_date)}\n\n` +
+      `Kindly settle your dues at the gym front desk to maintain uninterrupted access. Thank you! 💪`;
+
+    window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`, '_blank');
+  };
+
+  const sendEmailDueReminder = async (member) => {
+    if (!member.email) {
+      alert('This member does not have an email address registered.');
+      return;
+    }
     try {
-      setActionMessage({ text: `Dispatching due reminder email to ${memberName}...`, type: 'info' });
-      const res = await API.post(`/reminders/email/${memberId}`);
-      setActionMessage({ text: res.data.message, type: 'success' });
+      await API.post(`/members/${member.id}/reminder/email`);
+      setActionMessage({ text: `Dues reminder email sent to ${member.email}`, type: 'success' });
       setTimeout(() => setActionMessage({ text: '', type: '' }), 4000);
     } catch (err) {
-      setActionMessage({ text: err.response?.data?.message || 'Failed to send email.', type: 'error' });
-      setTimeout(() => setActionMessage({ text: '', type: '' }), 4000);
+      alert(err.response?.data?.message || 'Failed to send reminder email');
     }
   };
 
-  // ⚡ Send Bulk Email Due Reminders
-  const handleSendBulkEmailReminders = async () => {
-    if (!window.confirm(`Send payment reminder emails to all ${summary.dueMembersCount} members with pending dues?`)) return;
-    try {
-      setActionMessage({ text: 'Dispatching bulk reminders to all members with pending balance...', type: 'info' });
-      const res = await API.post('/reminders/email-bulk');
-      setActionMessage({ text: res.data.message, type: 'success' });
-      setTimeout(() => setActionMessage({ text: '', type: '' }), 4000);
-    } catch (err) {
-      setActionMessage({ text: err.response?.data?.message || 'Bulk reminder failed.', type: 'error' });
-      setTimeout(() => setActionMessage({ text: '', type: '' }), 4000);
-    }
+  const shareAttendanceQRWhatsApp = (member) => {
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const baseUrl = isLocal ? `http://${window.location.host}` : 'https://pulsefit-dinesh.vercel.app';
+    const passUrl = `${baseUrl}/pass/${member.id}`;
+    const facility = user?.gym_name || 'Pulse Fit Hub';
+
+    let cleanPhone = member.phone.replace(/[^0-9]/g, '');
+    if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
+
+    const text = `*${facility.toUpperCase()} - Official Attendance Access Pass*\n\n` +
+      `Hello *${member.full_name}*,\n` +
+      `Here is your digital check-in QR code for daily gym attendance.\n\n` +
+      `🪪 *Athlete ID:* #PF-${String(member.id).padStart(5, '0')}\n` +
+      `⚡ *Tier:* ${member.plan_type}\n` +
+      `📅 *Valid Until:* ${formatDate(member.expiry_date)}\n\n` +
+      `👉 *Open your Live Pass & QR Code:*\n${passUrl}\n\n` +
+      `Present this badge to the scanner upon arrival! 💪`;
+
+    window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`, '_blank');
   };
 
-  const formatPlanLabel = (plan, customMonths) => {
+  const calculatedBalance = Math.max(
+    0,
+    (Number(formData.total_amount) || 0) - (Number(formData.amount_paid) || 0)
+  );
+
+  const getLivePassUrl = (id) => {
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const baseUrl = isLocal ? `http://${window.location.host}` : 'https://pulsefit-dinesh.vercel.app';
+    return `${baseUrl}/pass/${id}`;
+  };
+
+  const formatPlanLabel = (plan) => {
     switch (plan) {
       case 'DAILY': return '⚡ Daily Pass';
       case 'MONTHLY': return '🗓️ 1 Month';
       case '2_MONTHS': return '🗓️ 2 Months';
-      case 'QUARTERLY': return '🗓️ 3 Months (Quarterly)';
-      case 'HALF_YEARLY': return '🗓️ 6 Months (Half-Yearly)';
-      case 'ANNUAL': return '👑 1 Year (Annual)';
-      case 'CUSTOM': return `⚙️ Custom (${customMonths || 1} Mos)`;
+      case 'QUARTERLY': return '🗓️ 3 Months';
+      case 'HALF_YEARLY': return '🗓️ 6 Months';
+      case 'ANNUAL': return '👑 1 Year';
+      case 'CUSTOM': return '⚙️ Custom';
       default: return plan;
     }
-  };
-
-  const planCounts = {
-    ALL: members.length,
-    DAILY: members.filter(m => m.plan_type === 'DAILY').length,
-    MONTHLY: members.filter(m => m.plan_type === 'MONTHLY').length,
-    '2_MONTHS': members.filter(m => m.plan_type === '2_MONTHS').length,
-    QUARTERLY: members.filter(m => m.plan_type === 'QUARTERLY').length,
-    HALF_YEARLY: members.filter(m => m.plan_type === 'HALF_YEARLY').length,
-    ANNUAL: members.filter(m => m.plan_type === 'ANNUAL').length,
-    CUSTOM: members.filter(m => m.plan_type === 'CUSTOM').length
   };
 
   const filteredMembers = members.filter((member) => {
@@ -287,136 +408,69 @@ export default function Members() {
     if (statusFilter === 'DUES' && !(Number(member.balance_due) > 0)) return false;
 
     if (planFilter !== 'ALL' && member.plan_type !== planFilter) return false;
+    if (paymentModeFilter !== 'ALL' && (member.payment_mode || 'UPI') !== paymentModeFilter) return false;
 
     return true;
   });
 
-  const calculatedBalance = Math.max(
-    0,
-    (Number(formData.total_amount) || 0) - (Number(formData.amount_paid) || 0)
-  );
-
-  const planFilterButtons = [
-    { id: 'ALL', label: 'All Plans', count: planCounts.ALL, color: 'text-slate-300' },
-    { id: 'DAILY', label: '⚡ Daily Pass', count: planCounts.DAILY, color: 'text-[#00F2FE]' },
-    { id: 'MONTHLY', label: '🗓️ 1 Month', count: planCounts.MONTHLY, color: 'text-purple-400' },
-    { id: '2_MONTHS', label: '🗓️ 2 Months', count: planCounts['2_MONTHS'], color: 'text-pink-400' },
-    { id: 'QUARTERLY', label: '🗓️ 3 Months', count: planCounts.QUARTERLY, color: 'text-emerald-400' },
-    { id: 'HALF_YEARLY', label: '🗓️ 6 Months', count: planCounts.HALF_YEARLY, color: 'text-amber-400' },
-    { id: 'ANNUAL', label: '👑 1 Year', count: planCounts.ANNUAL, color: 'text-blue-400' },
-    { id: 'CUSTOM', label: '⚙️ Custom', count: planCounts.CUSTOM, color: 'text-rose-400' }
-  ];
-
   return (
-    <div className="space-y-6 max-w-7xl mx-auto overflow-x-hidden pb-12">
+    <div className="space-y-4 sm:space-y-6 max-w-7xl mx-auto pb-12 px-1 sm:px-0">
       
-      {/* Action Notification Toast */}
+      {/* Toast Notification */}
       {actionMessage.text && (
-        <div className={`p-4 rounded-2xl border text-xs font-bold shadow-2xl flex items-center justify-between transition-all ${
-          actionMessage.type === 'success' ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300' :
-          actionMessage.type === 'error' ? 'bg-rose-500/15 border-rose-500/40 text-rose-300' :
-          'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+        <div className={`p-4 rounded-2xl border text-xs font-bold shadow-2xl flex items-center justify-between ${
+          actionMessage.type === 'success' ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300' : 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
         }`}>
           <span>{actionMessage.text}</span>
-          <button onClick={() => setActionMessage({ text: '', type: '' })} className="text-white hover:opacity-75">✕</button>
+          <button onClick={() => setActionMessage({ text: '', type: '' })}>✕</button>
         </div>
       )}
 
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
-          <h1 className="text-xl sm:text-2xl font-black text-white">Members Directory & Dues Engine</h1>
-          <p className="text-slate-400 text-xs mt-0.5">
-            {isSuperAdmin
-              ? 'Viewing all system members'
-              : 'Automated WhatsApp and Email reminders for pending balances.'}
-          </p>
+          <h1 className="text-lg sm:text-2xl font-black text-white tracking-tight">Members Directory</h1>
+          <p className="text-slate-400 text-xs">Payment mode tracking (Cash/UPI), Shareable QR badges, and dues reminders.</p>
         </div>
 
         {!isSuperAdmin && (
-          <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
-            {summary.dueMembersCount > 0 && (
-              <button
-                onClick={handleSendBulkEmailReminders}
-                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-rose-500/20 to-pink-500/20 hover:from-rose-500/30 hover:to-pink-500/30 border border-rose-500/40 text-rose-300 font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2 active:scale-95"
-              >
-                <span>⚡</span> Email Reminders to All ({summary.dueMembersCount})
-              </button>
-            )}
-
-            <button
-              onClick={handleOpenAddModal}
-              className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#00F2FE] to-[#7928CA] text-white font-bold text-xs shadow-lg hover:opacity-95 transition-all flex items-center justify-center gap-2 active:scale-95"
-            >
-              <span>+</span> Register New Member
-            </button>
-          </div>
+          <button
+            onClick={handleOpenAddModal}
+            className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#00F2FE] to-[#7928CA] text-white font-bold text-xs shadow-lg hover:opacity-95 transition-all flex items-center justify-center gap-2 active:scale-95"
+          >
+            <span>+</span> Register New Member
+          </button>
         )}
-      </div>
-
-      {/* Plan Filters */}
-      <div className="space-y-2.5">
-        <div className="flex justify-between items-center">
-          <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Filter By Plan Duration:</span>
-          {planFilter !== 'ALL' && (
-            <button onClick={() => setPlanFilter('ALL')} className="text-[11px] text-[#00F2FE] hover:underline font-bold">
-              Reset Plan Filter
-            </button>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
-          {planFilterButtons.map((btn) => (
-            <div
-              key={btn.id}
-              onClick={() => setPlanFilter(btn.id)}
-              className={`p-3 rounded-2xl border cursor-pointer transition-all flex flex-col justify-between select-none ${
-                planFilter === btn.id
-                  ? 'bg-gradient-to-b from-white/[0.12] to-white/[0.04] border-[#00F2FE] shadow-[0_0_15px_rgba(0,242,254,0.2)]'
-                  : 'bg-[#0B0F19] border-white/10 hover:border-white/20'
-              }`}
-            >
-              <span className={`text-[9px] font-black uppercase tracking-wider truncate ${btn.color}`}>{btn.label}</span>
-              <div className="mt-2 flex items-baseline justify-between">
-                <h4 className="text-xl sm:text-2xl font-black text-white font-mono">{btn.count}</h4>
-                <span className="text-[9px] text-slate-500 font-semibold uppercase">Members</span>
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* Metrics Row */}
       {!isSuperAdmin && (
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
-          <div onClick={() => setStatusFilter('ALL')} className={`p-3.5 rounded-2xl border cursor-pointer transition-all ${statusFilter === 'ALL' ? 'bg-[#00F2FE]/10 border-[#00F2FE]' : 'bg-[#0B0F19] border-white/10'}`}>
-            <p className="text-[9px] uppercase font-black text-slate-400 tracking-wider">All Statuses</p>
-            <h3 className="text-lg sm:text-xl font-black text-white mt-1">{summary.total}</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 sm:gap-3">
+          <div onClick={() => setStatusFilter('ALL')} className={`p-3 sm:p-3.5 rounded-2xl border cursor-pointer ${statusFilter === 'ALL' ? 'bg-[#00F2FE]/10 border-[#00F2FE]' : 'bg-[#0B0F19] border-white/10'}`}>
+            <p className="text-[9px] uppercase font-black text-slate-400">All Members</p>
+            <h3 className="text-base sm:text-lg font-black text-white mt-0.5">{summary.total}</h3>
           </div>
-          <div onClick={() => setStatusFilter('ACTIVE')} className={`p-3.5 rounded-2xl border cursor-pointer transition-all ${statusFilter === 'ACTIVE' ? 'bg-emerald-500/10 border-emerald-500' : 'bg-[#0B0F19] border-white/10'}`}>
-            <p className="text-[9px] uppercase font-black text-emerald-400 tracking-wider">Active</p>
-            <h3 className="text-lg sm:text-xl font-black text-emerald-400 mt-1">{summary.activeCount}</h3>
+          <div onClick={() => setStatusFilter('ACTIVE')} className={`p-3 sm:p-3.5 rounded-2xl border cursor-pointer ${statusFilter === 'ACTIVE' ? 'bg-emerald-500/10 border-emerald-500' : 'bg-[#0B0F19] border-white/10'}`}>
+            <p className="text-[9px] uppercase font-black text-emerald-400">Active</p>
+            <h3 className="text-base sm:text-lg font-black text-emerald-400 mt-0.5">{summary.activeCount}</h3>
           </div>
-          <div onClick={() => setStatusFilter('EXPIRING_SOON')} className={`p-3.5 rounded-2xl border cursor-pointer transition-all ${statusFilter === 'EXPIRING_SOON' ? 'bg-amber-500/10 border-amber-500' : 'bg-[#0B0F19] border-white/10'}`}>
-            <p className="text-[9px] uppercase font-black text-amber-400 tracking-wider">Expiring (≤ 7D)</p>
-            <h3 className="text-lg sm:text-xl font-black text-amber-400 mt-1">{summary.expiringSoonCount}</h3>
+          <div onClick={() => setStatusFilter('EXPIRING_SOON')} className={`p-3 sm:p-3.5 rounded-2xl border cursor-pointer ${statusFilter === 'EXPIRING_SOON' ? 'bg-amber-500/10 border-amber-500' : 'bg-[#0B0F19] border-white/10'}`}>
+            <p className="text-[9px] uppercase font-black text-amber-400">Expiring (≤7D)</p>
+            <h3 className="text-base sm:text-lg font-black text-amber-400 mt-0.5">{summary.expiringSoonCount}</h3>
           </div>
-          <div onClick={() => setStatusFilter('EXPIRED')} className={`p-3.5 rounded-2xl border cursor-pointer transition-all ${statusFilter === 'EXPIRED' ? 'bg-red-500/10 border-red-500' : 'bg-[#0B0F19] border-white/10'}`}>
-            <p className="text-[9px] uppercase font-black text-red-400 tracking-wider">Expired</p>
-            <h3 className="text-lg sm:text-xl font-black text-red-400 mt-1">{summary.expiredCount}</h3>
+          <div onClick={() => setStatusFilter('EXPIRED')} className={`p-3 sm:p-3.5 rounded-2xl border cursor-pointer ${statusFilter === 'EXPIRED' ? 'bg-red-500/10 border-red-500' : 'bg-[#0B0F19] border-white/10'}`}>
+            <p className="text-[9px] uppercase font-black text-red-400">Expired</p>
+            <h3 className="text-base sm:text-lg font-black text-red-400 mt-0.5">{summary.expiredCount}</h3>
           </div>
-          <div onClick={() => setStatusFilter('DUES')} className={`col-span-2 sm:col-span-1 p-3.5 rounded-2xl border cursor-pointer transition-all ${statusFilter === 'DUES' ? 'bg-rose-500/15 border-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.2)]' : 'bg-[#0B0F19] border-white/10'}`}>
-            <div className="flex justify-between items-center">
-              <p className="text-[9px] uppercase font-black text-rose-400 tracking-wider">Pending Dues</p>
-              <span className="text-[9px] font-bold px-1 rounded bg-rose-500/20 text-rose-300 font-mono">{summary.dueMembersCount} Due</span>
-            </div>
-            <h3 className="text-lg sm:text-xl font-black text-rose-400 mt-1 font-mono">₹{Number(summary.totalDuesAmount).toLocaleString('en-IN')}</h3>
+          <div onClick={() => setStatusFilter('DUES')} className={`col-span-2 sm:col-span-1 p-3 sm:p-3.5 rounded-2xl border cursor-pointer ${statusFilter === 'DUES' ? 'bg-rose-500/15 border-rose-500' : 'bg-[#0B0F19] border-white/10'}`}>
+            <p className="text-[9px] uppercase font-black text-rose-400">Pending Dues</p>
+            <h3 className="text-base sm:text-lg font-black text-rose-400 mt-0.5 font-mono">₹{Number(summary.totalDuesAmount).toLocaleString('en-IN')}</h3>
           </div>
         </div>
       )}
 
-      {/* Search & Status Pill Filter */}
-      <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+      {/* Filter and Search Bar */}
+      <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between">
         <div className="w-full sm:w-80">
           <input
             type="text"
@@ -427,189 +481,142 @@ export default function Members() {
           />
         </div>
 
-        {!isSuperAdmin && (
-          <div className="flex flex-wrap bg-[#0B0F19] p-1 rounded-xl border border-white/10 text-xs">
-            {[
-              { id: 'ALL', label: 'All' },
-              { id: 'ACTIVE', label: '🟢 Active' },
-              { id: 'EXPIRING_SOON', label: '🟡 Expiring' },
-              { id: 'EXPIRED', label: '🔴 Expired' },
-              { id: 'DUES', label: '⚠️ Dues' }
-            ].map((f) => (
-              <button
-                key={f.id}
-                onClick={() => setStatusFilter(f.id)}
-                className={`px-3 py-1.5 rounded-lg font-bold transition-all text-[11px] ${statusFilter === f.id ? 'bg-[#00F2FE] text-[#07090E]' : 'text-slate-400 hover:text-white'}`}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* Payment Mode Filter */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-400 font-bold">Payment Mode:</span>
+          <select
+            value={paymentModeFilter}
+            onChange={(e) => setPaymentModeFilter(e.target.value)}
+            className="bg-[#0B0F19] border border-white/15 px-3 py-2 rounded-xl text-xs text-white outline-none focus:border-[#00F2FE]"
+          >
+            <option value="ALL">All Modes (Cash & UPI)</option>
+            <option value="CASH">💵 Cash Only</option>
+            <option value="UPI">📱 UPI / Online Only</option>
+          </select>
+        </div>
       </div>
 
       {/* Members Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 sm:gap-5">
         {loading ? (
-          <div className="col-span-full text-center py-12 text-slate-500 text-xs font-bold">Loading membership directory...</div>
+          <div className="col-span-full text-center py-12 text-slate-500 font-bold text-xs">Loading membership directory...</div>
         ) : filteredMembers.length === 0 ? (
-          <div className="col-span-full text-center py-12 text-slate-500 text-xs font-bold bg-[#0B0F19] rounded-3xl border border-white/10 p-8">
-            No members found for this filter.
-          </div>
+          <div className="col-span-full text-center py-12 text-slate-500 font-bold bg-[#0B0F19] rounded-3xl border border-white/10 text-xs">No members found matching filters.</div>
         ) : (
-          filteredMembers.map((member) => {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const exp = new Date(member.expiry_date);
-            exp.setHours(0, 0, 0, 0);
-            const daysLeft = Math.ceil((exp - today) / (1000 * 60 * 60 * 24));
-            const isExpired = daysLeft < 0;
-            const balance = Number(member.balance_due) || 0;
-
-            return (
-              <div key={member.id} className="bg-[#0B0F19] p-4 sm:p-5 rounded-3xl border border-white/10 flex flex-col justify-between relative overflow-hidden group shadow-xl hover:border-[#00F2FE]/40 transition-all">
-                
-                {/* Header */}
-                <div className="flex justify-between items-start mb-3 gap-2">
-                  <div className="flex flex-wrap gap-1.5">
-                    <span className="text-[9px] uppercase tracking-wider font-black px-2.5 py-0.5 rounded-full bg-white/10 text-[#00F2FE] border border-white/10">
-                      {formatPlanLabel(member.plan_type, member.custom_months)}
+          filteredMembers.map((member) => (
+            <div key={member.id} className="bg-[#0B0F19] p-4 sm:p-5 rounded-3xl border border-white/10 flex flex-col justify-between hover:border-[#00F2FE]/40 transition-all shadow-xl">
+              <div>
+                <div className="flex justify-between items-start mb-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full bg-white/10 text-[#00F2FE]">
+                      {formatPlanLabel(member.plan_type)}
                     </span>
-
-                    {balance > 0 ? (
-                      <span className="text-[9px] uppercase tracking-wider font-black px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 border border-rose-500/30 font-mono">
-                        Due: ₹{balance.toLocaleString('en-IN')}
-                      </span>
-                    ) : (
-                      <span className="text-[9px] uppercase tracking-wider font-black px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                        Paid
-                      </span>
-                    )}
+                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${member.payment_mode === 'CASH' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30' : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'}`}>
+                      {member.payment_mode === 'CASH' ? '💵 Cash' : '📱 UPI'}
+                    </span>
                   </div>
 
-                  <span className={`text-[9px] uppercase tracking-wider font-black px-2 py-0.5 rounded-full border flex-shrink-0 ${
-                    isExpired ? 'bg-red-500/10 text-red-400 border-red-500/20' : daysLeft <= 7 ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                  }`}>
-                    {isExpired ? 'EXPIRED' : daysLeft <= 7 ? `${daysLeft}D LEFT` : 'ACTIVE'}
-                  </span>
+                  {Number(member.balance_due) > 0 ? (
+                    <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-mono">
+                      Due: ₹{Number(member.balance_due).toLocaleString('en-IN')}
+                    </span>
+                  ) : (
+                    <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Paid</span>
+                  )}
                 </div>
 
-                {/* Identity */}
                 <div className="flex gap-3.5 items-center my-2">
-                  <div 
-                    className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-black/50 overflow-hidden border border-white/15 flex-shrink-0 cursor-pointer shadow-md"
-                    onClick={() => setViewMember(member)}
-                  >
+                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-black/60 overflow-hidden border border-white/15 flex-shrink-0 flex items-center justify-center">
                     {member.photo_url ? (
-                      <img src={member.photo_url} alt={member.full_name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                      <img src={member.photo_url} alt={member.full_name} className="w-full h-full object-cover" />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center text-slate-500 font-bold text-xl sm:text-2xl">
-                        {member.full_name?.charAt(0)}
-                      </div>
+                      <div className="font-bold text-slate-500 text-lg">{member.full_name?.charAt(0)}</div>
                     )}
                   </div>
-
                   <div className="min-w-0 flex-1">
-                    <h3 
-                      className="text-white font-bold truncate text-sm sm:text-base cursor-pointer hover:text-[#00F2FE] transition-colors"
-                      onClick={() => setViewMember(member)}
-                    >
-                      {member.full_name}
-                    </h3>
-                    <p className="text-slate-400 text-xs font-mono mt-0.5">{member.phone}</p>
-                    <p className="text-[11px] text-slate-400 mt-1">
+                    <h3 className="text-white font-bold text-xs sm:text-sm truncate">{member.full_name}</h3>
+                    <p className="text-slate-400 text-xs font-mono">{member.phone}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
                       Paid: <span className="text-emerald-400 font-bold font-mono">₹{Number(member.amount_paid).toLocaleString('en-IN')}</span> / ₹{Number(member.total_amount || member.amount_paid).toLocaleString('en-IN')}
                     </p>
                   </div>
                 </div>
 
-                {/* Dates */}
-                <div className="mt-3 text-[11px] text-slate-400 border-t border-white/5 pt-2.5 space-y-1">
-                  <div className="flex justify-between">
-                    <span>Joined:</span>
-                    <strong className="text-slate-300 font-mono">{formatDate(member.start_date)}</strong>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Pass Expiry:</span>
-                    <strong className={`font-mono ${isExpired ? 'text-red-400 font-bold' : daysLeft <= 7 ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}`}>
-                      {formatDate(member.expiry_date)}
-                    </strong>
-                  </div>
-                </div>
-
-                {/* 💬 PAYMENT DUE REMINDER ACTION BAR (WHATSAPP + EMAIL) */}
-                {balance > 0 && !isSuperAdmin && (
-                  <div className="mt-3 pt-2.5 border-t border-rose-500/20 grid grid-cols-2 gap-2">
-                    <button
-                      onClick={() => openWhatsAppDueReminder({ member, gymName: user?.gym_name, ownerPhone: user?.phone })}
-                      className="py-1.5 px-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all active:scale-95"
-                    >
-                      <span>💬</span> WhatsApp
-                    </button>
-
-                    <button
-                      onClick={() => handleSendEmailReminder(member.id, member.full_name)}
-                      className="py-1.5 px-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all active:scale-95"
-                    >
-                      <span>📧</span> Email Notice
-                    </button>
+                {/* Dues Reminder Buttons */}
+                {Number(member.balance_due) > 0 && !isSuperAdmin && (
+                  <div className="mt-3 p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-between gap-1.5">
+                    <span className="text-[9px] font-bold text-rose-400">Remind:</span>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => sendWhatsAppDueReminder(member)}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-bold text-[10px] flex items-center gap-1 transition-all"
+                      >
+                        <span>💬</span> WhatsApp
+                      </button>
+                      <button
+                        onClick={() => sendEmailDueReminder(member)}
+                        className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 font-bold text-[10px] flex items-center gap-1 transition-all"
+                      >
+                        <span>📧</span> Email
+                      </button>
+                    </div>
                   </div>
                 )}
-
-                {/* Primary Card Buttons */}
-                <div className="grid grid-cols-4 gap-2 pt-3 mt-3 border-t border-white/5">
-                  <button onClick={() => setQrMember(member)} className="py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-[#00F2FE] text-xs font-bold transition-all flex items-center justify-center gap-1">
-                    🪪 QR
-                  </button>
-                  
-                  <button onClick={() => setViewMember(member)} className="py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white text-xs font-bold transition-all flex items-center justify-center">
-                    👁️ Info
-                  </button>
-
-                  {!isSuperAdmin && (
-                    <>
-                      <button onClick={() => handleOpenEditModal(member)} className="py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-bold transition-all flex items-center justify-center">
-                        ✏️ Edit
-                      </button>
-
-                      <button onClick={() => handleDeleteMember(member.id)} className="py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold transition-all flex items-center justify-center">
-                        🗑️
-                      </button>
-                    </>
-                  )}
-                </div>
-
               </div>
-            );
-          })
+
+              {/* Action Buttons */}
+              <div className="grid grid-cols-4 gap-1.5 pt-3 mt-2 border-t border-white/5">
+                <button onClick={() => setQrMember(member)} className="py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-[#00F2FE] text-xs font-bold transition-all">
+                  🪪 QR Pass
+                </button>
+                <button onClick={() => setViewMember(member)} className="py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white text-xs font-bold transition-all">
+                  👁️ Info
+                </button>
+                {!isSuperAdmin && (
+                  <>
+                    <button onClick={() => handleOpenEditModal(member)} className="py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-bold transition-all">
+                      ✏️ Edit
+                    </button>
+                    <button onClick={() => handleDeleteMember(member.id)} className="py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold transition-all">
+                      🗑️
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))
         )}
       </div>
 
-      {/* QR Pass Modal */}
+      {/* QR MODAL */}
       {qrMember && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0B0F19] w-full max-w-sm p-6 sm:p-8 rounded-3xl border border-white/20 text-center relative shadow-[0_0_50px_rgba(0,242,254,0.2)]">
-            <button onClick={() => setQrMember(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white text-lg">✕</button>
+          <div className="bg-[#0B0F19] w-full max-w-sm p-6 rounded-3xl border border-white/20 text-center relative shadow-2xl space-y-3">
+            <button onClick={() => setQrMember(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white text-base">✕</button>
 
-            <div className="flex items-center justify-center gap-2 mb-3">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-r from-[#00F2FE] to-[#FF0080] flex items-center justify-center text-white font-black text-xs">⚡</div>
-              <span className="text-sm font-black tracking-wider text-white">DIGITAL ACCESS BADGE</span>
+            <span className="text-[10px] font-black tracking-widest text-[#00F2FE] uppercase block">OFFICIAL ATTENDANCE BADGE</span>
+            <h3 className="text-lg font-black text-white">{qrMember.full_name}</h3>
+            <p className="text-xs text-slate-400 font-mono mb-2">#PF-{String(qrMember.id).padStart(5, '0')}</p>
+
+            <div className="bg-white p-4 rounded-2xl w-fit mx-auto shadow-xl border-4 border-[#00F2FE]/40">
+              <QRCodeSVG 
+                value={getLivePassUrl(qrMember.id)} 
+                size={180} 
+                level={"H"} 
+                includeMargin={false} 
+              />
             </div>
 
-            <h3 className="text-xl font-black text-white">{qrMember.full_name}</h3>
-            <p className="text-[11px] text-[#00F2FE] uppercase font-bold tracking-widest mb-4">
-              {formatPlanLabel(qrMember.plan_type, qrMember.custom_months)}
-            </p>
+            <p className="text-[10px] text-slate-400">Scan at the front desk for immediate check-in / check-out</p>
 
-            <div className="bg-white p-4 rounded-2xl w-fit mx-auto shadow-xl border-4 border-[#00F2FE]/40 mb-4">
-              <QRCodeSVG value={`http://${window.location.hostname}:5173/pass/${qrMember.id}`} size={180} level={"H"} includeMargin={false} />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 mt-4">
-              <a href={`/pass/${qrMember.id}`} target="_blank" rel="noreferrer" className="py-2.5 rounded-xl bg-white/10 text-white font-bold text-xs hover:bg-white/20 transition-all flex items-center justify-center">
-                Open Pass
-              </a>
-              <button onClick={() => window.print()} className="py-2.5 rounded-xl bg-gradient-to-r from-[#00F2FE] to-[#7928CA] text-white font-bold text-xs hover:opacity-90 transition-all">
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                onClick={() => shareAttendanceQRWhatsApp(qrMember)}
+                className="py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 border border-emerald-500/30 transition-all"
+              >
+                <span>💬</span> Share Pass
+              </button>
+              <button onClick={() => window.print()} className="py-2.5 rounded-xl bg-gradient-to-r from-[#00F2FE] to-[#7928CA] text-white font-bold text-xs">
                 Print Badge
               </button>
             </div>
@@ -617,127 +624,180 @@ export default function Members() {
         </div>
       )}
 
-      {/* View Member Profile Modal */}
+      {/* VIEW MEMBER INFO MODAL */}
       {viewMember && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0B0F19] w-full max-w-md p-6 sm:p-8 rounded-3xl border border-white/20 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-black text-white">Member Profile</h2>
-              <button onClick={() => setViewMember(null)} className="text-slate-400 hover:text-white text-lg">✕</button>
-            </div>
-
-            <div className="text-center mb-6">
-              <div className="w-24 h-24 rounded-3xl bg-black/60 border border-white/20 overflow-hidden mx-auto mb-3 shadow-xl flex items-center justify-center">
+          <div className="bg-[#0B0F19] w-full max-w-md p-6 rounded-3xl border border-white/20 relative shadow-2xl space-y-4">
+            <button onClick={() => setViewMember(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white text-base">✕</button>
+            
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-black/60 overflow-hidden border border-white/15 flex-shrink-0 flex items-center justify-center">
                 {viewMember.photo_url ? (
                   <img src={viewMember.photo_url} alt={viewMember.full_name} className="w-full h-full object-cover" />
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center text-slate-500 font-bold text-3xl">{viewMember.full_name?.charAt(0)}</div>
+                  <div className="font-bold text-slate-500 text-xl">{viewMember.full_name?.charAt(0)}</div>
                 )}
               </div>
-              <h3 className="text-xl font-bold text-white">{viewMember.full_name}</h3>
-              <p className="text-xs text-[#00F2FE] font-bold uppercase mt-0.5">
-                {formatPlanLabel(viewMember.plan_type, viewMember.custom_months)}
-              </p>
+              <div>
+                <h3 className="text-lg font-black text-white">{viewMember.full_name}</h3>
+                <p className="text-xs text-slate-400 font-mono">#PF-{String(viewMember.id).padStart(5, '0')}</p>
+                <span className="text-[10px] font-bold text-[#00F2FE] uppercase">{formatPlanLabel(viewMember.plan_type)}</span>
+              </div>
             </div>
 
-            <div className="space-y-3 text-xs text-slate-300 border-t border-white/10 pt-4">
-              <div className="flex justify-between"><span>Email:</span> <strong className="text-white">{viewMember.email || '—'}</strong></div>
-              <div className="flex justify-between"><span>Phone:</span> <strong className="text-white font-mono">{viewMember.phone}</strong></div>
-              <div className="flex justify-between"><span>Total Plan Fee:</span> <strong className="text-white font-mono">₹{Number(viewMember.total_amount || viewMember.amount_paid).toLocaleString('en-IN')}</strong></div>
-              <div className="flex justify-between"><span>Amount Paid:</span> <strong className="text-emerald-400 font-bold font-mono">₹{Number(viewMember.amount_paid).toLocaleString('en-IN')}</strong></div>
-              <div className="flex justify-between">
-                <span>Balance Due:</span> 
-                <strong className={Number(viewMember.balance_due) > 0 ? 'text-rose-400 font-bold font-mono' : 'text-emerald-400 font-bold'}>
-                  ₹{Number(viewMember.balance_due || 0).toLocaleString('en-IN')}
-                </strong>
-              </div>
-              <div className="flex justify-between"><span>Joined:</span> <strong className="text-white font-mono">{formatDate(viewMember.start_date)}</strong></div>
-              <div className="flex justify-between"><span>Pass Expiration:</span> <strong className="text-amber-400 font-bold font-mono">{formatDate(viewMember.expiry_date)}</strong></div>
+            <div className="p-3.5 rounded-2xl bg-black/40 border border-white/5 space-y-2 text-xs">
+              <div className="flex justify-between"><span className="text-slate-400">Payment Mode:</span><span className="font-bold text-[#00F2FE]">{viewMember.payment_mode || 'UPI'}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Gender:</span><span className="text-white font-bold">{viewMember.gender || '—'}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Date of Birth:</span><span className="text-white">{viewMember.dob ? formatDate(viewMember.dob) : '—'}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Phone:</span><span className="font-mono text-white">{viewMember.phone}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Email:</span><span className="text-white">{viewMember.email || '—'}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Start Date:</span><span className="text-white">{formatDate(viewMember.start_date)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Expiry Date:</span><span className="text-amber-400 font-bold">{formatDate(viewMember.expiry_date)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Total Fee:</span><span className="font-mono text-white">₹{Number(viewMember.total_amount).toLocaleString('en-IN')}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Amount Paid:</span><span className="font-mono text-emerald-400 font-bold">₹{Number(viewMember.amount_paid).toLocaleString('en-IN')}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Discount Given:</span><span className="font-mono text-amber-300 font-bold">₹{Number(viewMember.discount || 0).toLocaleString('en-IN')}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Remaining Due:</span><span className="font-mono text-rose-400 font-bold">₹{Number(viewMember.balance_due || 0).toLocaleString('en-IN')}</span></div>
             </div>
 
-            {/* Quick Actions inside modal */}
-            {Number(viewMember.balance_due) > 0 && (
-              <div className="mt-5 grid grid-cols-2 gap-2 pt-4 border-t border-white/10">
-                <button
-                  onClick={() => openWhatsAppDueReminder({ member: viewMember, gymName: user?.gym_name, ownerPhone: user?.phone })}
-                  className="py-2.5 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center justify-center gap-1.5"
-                >
-                  <span>💬</span> WhatsApp Notice
-                </button>
-                <button
-                  onClick={() => handleSendEmailReminder(viewMember.id, viewMember.full_name)}
-                  className="py-2.5 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-bold flex items-center justify-center gap-1.5"
-                >
-                  <span>📧</span> Email Notice
-                </button>
-              </div>
-            )}
+            <button onClick={() => setViewMember(null)} className="w-full py-2.5 rounded-xl bg-white/10 text-white font-bold text-xs">
+              Close Profile
+            </button>
           </div>
         </div>
       )}
 
-      {/* Add / Edit Member Modal */}
+      {/* REGISTER / EDIT MEMBER MODAL */}
       {isModalOpen && !isSuperAdmin && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-          <div className="bg-[#0B0F19] w-full max-w-2xl p-6 sm:p-8 rounded-3xl border border-white/20 max-h-[90vh] overflow-y-auto my-auto shadow-2xl">
-            <div className="flex justify-between items-center mb-6 pb-2 border-b border-white/10">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0B0F19] w-full max-w-2xl p-5 sm:p-8 rounded-3xl border border-white/20 max-h-[92vh] overflow-y-auto my-auto shadow-2xl">
+            <div className="flex justify-between items-center mb-4 pb-2 border-b border-white/10">
               <div>
-                <h2 className="text-xl font-black text-white">{editingMember ? 'Update Member Profile' : 'Register Gym Member'}</h2>
-                <p className="text-xs text-slate-400">Configure plan duration, auto dates, and partial fees.</p>
+                <h2 className="text-lg sm:text-xl font-black text-white">{editingMember ? 'Update Member Profile' : 'Register Gym Member'}</h2>
+                <p className="text-[11px] text-slate-400">Auto-pricing, discounts, and payment mode tracking.</p>
               </div>
-              <button onClick={() => { setIsModalOpen(false); resetForm(); }} className="text-slate-400 hover:text-white text-lg">✕</button>
+              <button onClick={() => { stopLiveCamera(); setIsModalOpen(false); }} className="text-slate-400 hover:text-white text-base">✕</button>
             </div>
 
-            {formError && <div className="mb-4 text-xs p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 font-medium">{formError}</div>}
+            {formError && <div className="mb-4 text-xs p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400">{formError}</div>}
+            {cameraError && <div className="mb-4 text-xs p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">{cameraError}</div>}
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="flex items-center gap-4 p-3 rounded-2xl bg-black/40 border border-white/10">
-                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-black/60 border border-white/20 overflow-hidden flex items-center justify-center flex-shrink-0">
-                  {formData.photo_url ? (
-                    <img src={formData.photo_url} alt="Preview" className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-xs text-slate-500 font-bold">Photo</span>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Member Photo (Optional)</label>
-                  <input type="file" accept="image/*" onChange={handleImageChange} className="text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-white/10 file:text-white hover:file:bg-white/20" />
+              
+              {/* Photo Options: Upload + Camera */}
+              <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-3">
+                <div className="flex flex-col sm:flex-row items-center gap-4">
+                  <div className="w-24 h-24 rounded-2xl bg-black/80 border-2 border-dashed border-[#00F2FE]/40 overflow-hidden flex items-center justify-center flex-shrink-0 relative shadow-inner">
+                    {isCameraActive ? (
+                      <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                    ) : formData.photo_url ? (
+                      <img src={formData.photo_url} alt="Preview" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="text-center text-slate-500">
+                        <span className="text-2xl block">👤</span>
+                        <span className="text-[8px] uppercase font-bold text-slate-400">No Photo</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <canvas ref={canvasRef} className="hidden" />
+
+                  <div className="flex-1 text-center sm:text-left space-y-2">
+                    <span className="text-[10px] font-bold text-slate-300 uppercase block">Athlete Photo (Digital QR Pass)</span>
+                    
+                    <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { stopLiveCamera(); fileInputRef.current?.click(); }}
+                        className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white font-bold text-xs transition-all active:scale-95 flex items-center gap-1.5"
+                      >
+                        <span>📁</span> Upload Photo
+                      </button>
+
+                      {!isCameraActive ? (
+                        <button
+                          type="button"
+                          onClick={startLiveCamera}
+                          className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-[#00F2FE]/20 to-[#7928CA]/20 hover:from-[#00F2FE]/30 hover:to-[#7928CA]/30 border border-[#00F2FE]/40 text-[#00F2FE] font-bold text-xs transition-all active:scale-95 flex items-center gap-1.5"
+                        >
+                          <span>📷</span> Take Live Photo
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={captureLivePhoto}
+                            className="px-4 py-1.5 rounded-xl bg-[#00F2FE] hover:bg-[#00F2FE]/90 text-black font-black text-xs transition-all active:scale-95 flex items-center gap-1.5 shadow-[0_0_15px_rgba(0,242,254,0.4)]"
+                          >
+                            <span>📸</span> Capture
+                          </button>
+                          <button
+                            type="button"
+                            onClick={stopLiveCamera}
+                            className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 font-bold text-xs"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+
+                      {formData.photo_url && !isCameraActive && (
+                        <button
+                          type="button"
+                          onClick={removePhoto}
+                          className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 font-bold text-xs transition-all"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleImageUpload}
+                    />
+                    <p className="text-[9px] text-slate-500">Choose from gallery or snap real-time webcam photo.</p>
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Form Input Fields */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Full Name *</label>
-                  <input type="text" required placeholder="e.g. Rahul Sharma" value={formData.full_name} className="w-full bg-black/40 border border-white/15 px-4 py-2.5 rounded-xl text-xs text-white outline-none focus:border-[#00F2FE]" onChange={(e) => setFormData({ ...formData, full_name: e.target.value })} />
+                  <input type="text" required placeholder="e.g. Rahul Sharma" value={formData.full_name} className="w-full bg-black/40 border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none focus:border-[#00F2FE]" onChange={(e) => setFormData({ ...formData, full_name: e.target.value })} />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Phone Number *</label>
-                  <input type="text" required placeholder="9876543210" value={formData.phone} className="w-full bg-black/40 border border-white/15 px-4 py-2.5 rounded-xl text-xs text-white outline-none focus:border-[#00F2FE]" onChange={(e) => setFormData({ ...formData, phone: e.target.value })} />
+                  <input type="text" required placeholder="9876543210" value={formData.phone} className="w-full bg-black/40 border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none focus:border-[#00F2FE]" onChange={(e) => setFormData({ ...formData, phone: e.target.value })} />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Email Address</label>
-                  <input type="email" placeholder="member@gmail.com" value={formData.email} className="w-full bg-black/40 border border-white/15 px-4 py-2.5 rounded-xl text-xs text-white outline-none focus:border-[#00F2FE]" onChange={(e) => setFormData({ ...formData, email: e.target.value })} />
+                  <label className="block text-[10px] font-bold text-[#00F2FE] uppercase mb-1">Email Address *</label>
+                  <input type="email" required placeholder="member@gmail.com" value={formData.email} className="w-full bg-black/40 border border-[#00F2FE]/40 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none focus:border-[#00F2FE]" onChange={(e) => setFormData({ ...formData, email: e.target.value })} />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Date of Birth (DOB)</label>
+                  <input type="date" value={formData.dob} className="w-full bg-black/40 border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none focus:border-[#00F2FE]" onChange={(e) => setFormData({ ...formData, dob: e.target.value })} />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Gender</label>
-                  <select value={formData.gender} className="w-full bg-[#07090E] border border-white/15 px-4 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => setFormData({ ...formData, gender: e.target.value })}>
+                  <select value={formData.gender} className="w-full bg-[#07090E] border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => setFormData({ ...formData, gender: e.target.value })}>
                     <option value="MALE">Male</option>
                     <option value="FEMALE">Female</option>
+                    <option value="OTHER">Other</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Date of Birth *</label>
-                  <input type="date" required value={formData.dob} className="w-full bg-black/40 border border-white/15 px-4 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => setFormData({ ...formData, dob: e.target.value })} />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Plan Duration *</label>
-                  <select value={formData.plan_type} className="w-full bg-[#07090E] border border-white/15 px-4 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => handlePlanChange(e.target.value)}>
-                    <option value="DAILY">⚡ Daily Pass (1 Day)</option>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Membership Plan Duration *</label>
+                  <select value={formData.plan_type} className="w-full bg-[#07090E] border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => handlePlanChange(e.target.value)}>
+                    <option value="DAILY">⚡ Daily Pass</option>
                     <option value="MONTHLY">🗓️ 1 Month</option>
                     <option value="2_MONTHS">🗓️ 2 Months</option>
                     <option value="QUARTERLY">🗓️ 3 Months (Quarterly)</option>
@@ -747,49 +807,65 @@ export default function Members() {
                   </select>
                 </div>
 
-                {formData.plan_type === 'CUSTOM' && (
-                  <div className="col-span-full">
-                    <label className="block text-[10px] font-bold text-[#00F2FE] uppercase mb-1">Custom Months</label>
-                    <input type="number" min="1" max="60" value={formData.custom_months} className="w-full bg-black/40 border border-[#00F2FE]/40 px-4 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => handleCustomMonthsChange(e.target.value)} />
-                  </div>
-                )}
+                {/* Pricing & Discount */}
+                <div>
+                  <label className="block text-[10px] font-bold text-[#00F2FE] uppercase mb-1">Plan Standard Fee (Auto-Fetched ₹)</label>
+                  <input type="number" readOnly value={formData.base_price} className="w-full bg-black/60 border border-[#00F2FE]/40 px-3.5 py-2.5 rounded-xl text-xs text-[#00F2FE] font-bold font-mono outline-none" />
+                </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Total Fee (₹ INR) *</label>
-                  <input type="number" required placeholder="3000" value={formData.total_amount} className="w-full bg-black/40 border border-white/15 px-4 py-2.5 rounded-xl text-xs text-white outline-none font-mono" onChange={(e) => setFormData({ ...formData, total_amount: e.target.value })} />
+                  <label className="block text-[10px] font-bold text-amber-400 uppercase mb-1">Special Discount (₹ INR)</label>
+                  <input type="number" min="0" placeholder="0" value={formData.discount} className="w-full bg-black/40 border border-amber-400/40 px-3.5 py-2.5 rounded-xl text-xs text-amber-300 font-bold font-mono outline-none" onChange={(e) => handleDiscountChange(e.target.value)} />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Net Agreed Fee (₹ INR) *</label>
+                  <input type="number" required value={formData.total_amount} className="w-full bg-black/40 border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none font-mono" onChange={(e) => setFormData({ ...formData, total_amount: e.target.value })} />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Amount Paid (₹ INR) *</label>
-                  <input type="number" required placeholder="1500" value={formData.amount_paid} className="w-full bg-black/40 border border-white/15 px-4 py-2.5 rounded-xl text-xs text-white outline-none font-mono" onChange={(e) => setFormData({ ...formData, amount_paid: e.target.value })} />
+                  <input type="number" required value={formData.amount_paid} className="w-full bg-black/40 border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none font-mono" onChange={(e) => setFormData({ ...formData, amount_paid: e.target.value })} />
+                </div>
+
+                {/* 💳 PAYMENT MODE DROPDOWN */}
+                <div className="col-span-full">
+                  <label className="block text-[10px] font-bold text-[#00F2FE] uppercase mb-1">Payment Method / Mode *</label>
+                  <select
+                    value={formData.payment_mode}
+                    onChange={(e) => setFormData({ ...formData, payment_mode: e.target.value })}
+                    className="w-full bg-[#07090E] border border-[#00F2FE]/40 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none font-bold"
+                  >
+                    <option value="UPI">📱 UPI / Online Transfer (GPay, PhonePe, Paytm, Bank)</option>
+                    <option value="CASH">💵 Cash (Physical Currency Handover)</option>
+                  </select>
                 </div>
 
                 <div className="col-span-full p-3 rounded-xl bg-black/50 border border-white/10 flex justify-between items-center text-xs">
-                  <span className="text-slate-400">Remaining Balance Due:</span>
-                  <strong className={calculatedBalance > 0 ? 'text-rose-400 font-mono text-sm' : 'text-emerald-400 font-mono text-sm'}>
+                  <span className="text-slate-400 text-[11px]">Remaining Balance Due:</span>
+                  <strong className={calculatedBalance > 0 ? 'text-rose-400 font-mono text-xs' : 'text-emerald-400 font-mono text-xs'}>
                     ₹{calculatedBalance.toLocaleString('en-IN')} {calculatedBalance > 0 ? '(PARTIAL DUE)' : '(PAID IN FULL)'}
                   </strong>
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Joining Date *</label>
-                  <input type="date" required value={formData.start_date} className="w-full bg-black/40 border border-white/15 px-4 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => handleStartDateChange(e.target.value)} />
+                  <input type="date" required value={formData.start_date} className="w-full bg-black/40 border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => setFormData({ ...formData, start_date: e.target.value })} />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Expiration Date *</label>
-                  <input type="date" required value={formData.expiry_date} className="w-full bg-black/40 border border-[#00F2FE]/40 px-4 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => setFormData({ ...formData, expiry_date: e.target.value })} />
+                  <input type="date" required value={formData.expiry_date} className="w-full bg-black/40 border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none" onChange={(e) => setFormData({ ...formData, expiry_date: e.target.value })} />
                 </div>
               </div>
 
-              <button type="submit" className="w-full py-3.5 rounded-xl bg-gradient-to-r from-[#00F2FE] to-[#7928CA] font-bold text-white text-xs uppercase tracking-wider mt-4 hover:opacity-95 active:scale-95 shadow-lg">
-                {editingMember ? 'Save Changes' : 'Confirm Registration & Generate Pass'}
+              <button type="submit" className="w-full py-3.5 rounded-xl bg-gradient-to-r from-[#00F2FE] to-[#7928CA] font-bold text-white text-xs uppercase tracking-wider mt-3 active:scale-95 transition-all shadow-lg">
+                {editingMember ? 'Save Changes' : 'Confirm Registration & Send QR Pass to Email'}
               </button>
             </form>
           </div>
         </div>
       )}
-
     </div>
   );
 }

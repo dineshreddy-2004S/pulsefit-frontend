@@ -98,6 +98,22 @@ export default function Sidebar() {
                 <span>Members Directory</span>
               </NavLink>
 
+              {/* 📋 ATTENDANCE DASHBOARD NAVIGATION LINK */}
+              <NavLink
+                to="/attendance"
+                onClick={() => setIsMobileOpen(false)}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                    isActive
+                      ? 'bg-gradient-to-r from-[#00F2FE]/20 to-[#7928CA]/20 text-[#00F2FE] border border-[#00F2FE]/40 shadow-[0_0_15px_rgba(0,242,254,0.15)]'
+                      : 'text-slate-400 hover:text-white hover:bg-white/5'
+                  }`
+                }
+              >
+                <span className="text-lg">📋</span>
+                <span>Attendance Dashboard</span>
+              </NavLink>
+
               <NavLink
                 to="/fees"
                 onClick={() => setIsMobileOpen(false)}
@@ -143,6 +159,7 @@ export default function Sidebar() {
 
   return (
     <>
+      {/* Mobile Top Navigation Header */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-40 bg-[#0B0F19]/90 backdrop-blur-xl border-b border-white/10 px-4 py-3 flex justify-between items-center">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-8 h-8 rounded-xl overflow-hidden border border-[#00F2FE] flex-shrink-0 bg-black">
@@ -161,6 +178,7 @@ export default function Sidebar() {
         </button>
       </div>
 
+      {/* Mobile Drawer Menu */}
       {isMobileOpen && (
         <div
           className="lg:hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex"
@@ -179,6 +197,7 @@ export default function Sidebar() {
         </div>
       )}
 
+      {/* Desktop Persistent Sidebar */}
       <aside className="hidden lg:flex w-72 bg-[#0B0F19] border-r border-white/10 flex-col justify-between p-5 min-h-screen sticky top-0 h-screen overflow-y-auto flex-shrink-0">
         {navContent}
       </aside>

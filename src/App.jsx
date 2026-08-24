@@ -9,11 +9,18 @@ import Members from './pages/Members';
 import MembershipFees from './pages/MembershipFees';
 import MemberPassView from './pages/MemberPassView';
 import Sidebar from './components/Sidebar';
+import Attendance from './pages/Attendance';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user, loading } = useContext(AuthContext);
 
-  if (loading) return <div className="min-h-screen bg-[#07090E] flex items-center justify-center text-slate-400 text-xs font-bold">Loading Pulse Fit Session...</div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#07090E] flex items-center justify-center text-slate-400 text-xs font-bold">
+        Loading Pulse Fit Session...
+      </div>
+    );
+  }
   if (!user) return <Navigate to="/" replace />;
   if (allowedRoles && !allowedRoles.includes(user.role)) {
     return <Navigate to={user.role === 'ADMIN' ? '/admin/users' : '/dashboard'} replace />;
@@ -26,7 +33,8 @@ function Layout({ children }) {
   return (
     <div className="min-h-screen bg-[#07090E] text-slate-100 flex flex-col lg:flex-row">
       <Sidebar />
-      <main className="flex-grow pt-16 lg:pt-0 p-4 sm:p-6 md:p-8 lg:p-10 max-w-7xl mx-auto w-full overflow-x-hidden">
+      {/* Increased top padding (pt-24 on mobile/tablet to clear the header bar, lg:pt-10 on desktop) */}
+      <main className="flex-grow pt-24 sm:pt-28 lg:pt-10 p-4 sm:p-6 md:p-8 lg:p-10 max-w-7xl mx-auto w-full overflow-x-hidden">
         {children}
       </main>
     </div>
@@ -38,10 +46,12 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
+          {/* Public Standalone Routes */}
           <Route path="/" element={<LandingPage />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/pass/:memberId" element={<MemberPassView />} />
 
+          {/* Protected Dashboard Routes */}
           <Route path="/dashboard" element={
             <ProtectedRoute allowedRoles={['GYM_OWNER', 'TRAINER', 'STAFF']}>
               <Layout><Dashboard /></Layout>
@@ -51,6 +61,12 @@ export default function App() {
           <Route path="/members" element={
             <ProtectedRoute allowedRoles={['GYM_OWNER', 'TRAINER', 'STAFF']}>
               <Layout><Members /></Layout>
+            </ProtectedRoute>
+          } />
+
+          <Route path="/attendance" element={
+            <ProtectedRoute allowedRoles={['GYM_OWNER', 'TRAINER', 'STAFF']}>
+              <Layout><Attendance /></Layout>
             </ProtectedRoute>
           } />
 
@@ -66,6 +82,7 @@ export default function App() {
             </ProtectedRoute>
           } />
 
+          {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>

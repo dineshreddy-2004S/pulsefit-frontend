@@ -1,13 +1,12 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
 import API from '../services/api';
 import { AuthContext } from '../context/AuthContext';
-import { formatDate, formatDateTime } from '../utils/dateFormatter';
 
 export default function AdminUsers() {
   const { user } = useContext(AuthContext);
   const isSuperAdmin = user?.role === 'ADMIN';
 
-  const [activeTab, setActiveTab] = useState('STAFF');
+  const [activeTab, setActiveTab] = useState('STAFF'); // 'STAFF' or 'LOGS'
   const [users, setUsers] = useState([]);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -24,35 +23,64 @@ export default function AdminUsers() {
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
 
+  // Self-contained safe date and time formatting
+  const formatDate = (dateVal) => {
+    if (!dateVal) return '—';
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return dateVal;
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  };
+
+  const formatDateTime = (dateVal) => {
+    if (!dateVal) return '—';
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return dateVal;
+    return d.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
   const fetchUsers = async () => {
     try {
-      setLoading(true);
       const res = await API.get('/admin/users');
-      setUsers(res.data);
+      setUsers(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
+      console.error('Failed to fetch users:', err);
     }
   };
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       const params = {};
       if (logActionFilter !== 'ALL') params.action = logActionFilter;
       if (logStaffFilter !== 'ALL') params.staffId = logStaffFilter;
 
       const res = await API.get('/admin/logs', { params });
-      setLogs(res.data);
+      setLogs(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to fetch activity logs:', err);
     }
-  };
-
-  useEffect(() => {
-    fetchUsers();
-    if (!isSuperAdmin) fetchLogs();
   }, [logActionFilter, logStaffFilter]);
+
+  // Initial load once on component mount
+  useEffect(() => {
+    const init = async () => {
+      setLoading(true);
+      await Promise.all([fetchUsers(), fetchLogs()]);
+      setLoading(false);
+    };
+    init();
+  }, []);
+
+  // Filter change load only
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
   const togglePasswordVisibility = (userId) => {
     setVisiblePasswords((prev) => ({ ...prev, [userId]: !prev[userId] }));
@@ -61,8 +89,7 @@ export default function AdminUsers() {
   const handleUpdateStatus = async (userId, newStatus, currentRole) => {
     try {
       await API.put(`/admin/users/${userId}`, { status: newStatus, role: currentRole });
-      fetchUsers();
-      if (!isSuperAdmin) fetchLogs();
+      await Promise.all([fetchUsers(), fetchLogs()]);
     } catch (err) {
       alert(err.response?.data?.message || 'Action failed');
     }
@@ -71,8 +98,7 @@ export default function AdminUsers() {
   const handleRoleChange = async (userId, currentStatus, newRole) => {
     try {
       await API.put(`/admin/users/${userId}`, { status: currentStatus, role: newRole });
-      fetchUsers();
-      if (!isSuperAdmin) fetchLogs();
+      await Promise.all([fetchUsers(), fetchLogs()]);
     } catch (err) {
       alert(err.response?.data?.message || 'Role update failed');
     }
@@ -82,8 +108,7 @@ export default function AdminUsers() {
     if (!window.confirm('Are you sure you want to remove this account?')) return;
     try {
       await API.delete(`/admin/users/${userId}`);
-      fetchUsers();
-      if (!isSuperAdmin) fetchLogs();
+      await Promise.all([fetchUsers(), fetchLogs()]);
     } catch (err) {
       alert(err.response?.data?.message || 'Delete failed');
     }
@@ -98,8 +123,7 @@ export default function AdminUsers() {
       await API.post('/admin/users/create', newUserData);
       setFormSuccess(`${newUserData.role === 'TRAINER' ? 'Trainer' : 'Staff'} account created successfully!`);
       setNewUserData({ name: '', email: '', password: '', role: 'TRAINER' });
-      fetchUsers();
-      if (!isSuperAdmin) fetchLogs();
+      await Promise.all([fetchUsers(), fetchLogs()]);
       setTimeout(() => {
         setIsCreateModalOpen(false);
         setFormSuccess('');
@@ -111,12 +135,16 @@ export default function AdminUsers() {
 
   const getActionBadge = (type) => {
     switch (type) {
+      case 'REGISTERED_MEMBER':
       case 'ADDED_MEMBER':
         return <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 whitespace-nowrap">➕ Member Enrolled</span>;
       case 'UPDATED_MEMBER':
         return <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/30 whitespace-nowrap">✏️ Member Modified</span>;
       case 'DELETED_MEMBER':
         return <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-red-500/10 text-red-400 border border-red-500/30 whitespace-nowrap">🗑️ Member Deleted</span>;
+      case 'SENT_DUES_REMINDER':
+      case 'DUES_REMINDER_SENT':
+        return <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 whitespace-nowrap">📧 Dues Reminder</span>;
       case 'CREATED_STAFF':
         return <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 whitespace-nowrap">👤 Staff Added</span>;
       case 'UPDATED_STAFF':
@@ -124,7 +152,7 @@ export default function AdminUsers() {
       case 'DELETED_STAFF':
         return <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-rose-500/10 text-rose-400 border border-rose-500/30 whitespace-nowrap">🚫 Staff Removed</span>;
       default:
-        return <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-slate-500/10 text-slate-400 border border-slate-500/30 whitespace-nowrap">{type}</span>;
+        return <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-slate-500/10 text-slate-400 border border-slate-500/30 whitespace-nowrap">{type?.replace(/_/g, ' ') || 'LOGGED'}</span>;
     }
   };
 
@@ -149,7 +177,7 @@ export default function AdminUsers() {
           <p className="text-slate-400 text-xs mt-0.5">
             {isSuperAdmin
               ? 'Inspect gym owner profiles, review facility logos, addresses, and grant or revoke access.'
-              : 'Track who registered, edited, or deleted members, view staff passwords, and manage team permissions.'}
+              : 'Track member enrollments, staff changes, and dues reminder history in real-time.'}
           </p>
         </div>
 
@@ -163,7 +191,7 @@ export default function AdminUsers() {
         )}
       </div>
 
-      {/* Responsive Filter & Tab Bar */}
+      {/* Tab Switcher & Status Filter */}
       <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 border-b border-white/10 pb-4">
         {!isSuperAdmin ? (
           <div className="grid grid-cols-2 sm:flex gap-2">
@@ -173,15 +201,15 @@ export default function AdminUsers() {
                 activeTab === 'STAFF' ? 'bg-[#00F2FE] text-[#07090E] shadow-[0_0_15px_rgba(0,242,254,0.3)]' : 'text-slate-400 bg-white/5'
               }`}
             >
-              👥 Staff Logins
+              👥 Staff Logins ({users.length})
             </button>
             <button
-              onClick={() => { setActiveTab('LOGS'); fetchLogs(); }}
+              onClick={() => setActiveTab('LOGS')}
               className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all text-center flex items-center justify-center gap-2 ${
                 activeTab === 'LOGS' ? 'bg-[#FF0080] text-white shadow-[0_0_15px_rgba(255,0,128,0.3)]' : 'text-slate-400 bg-white/5'
               }`}
             >
-              📜 Activity Trail
+              📜 Activity Trail ({logs.length})
             </button>
           </div>
         ) : (
@@ -190,7 +218,7 @@ export default function AdminUsers() {
           </div>
         )}
 
-        {/* Status Pills */}
+        {/* Status Filter */}
         <div className="flex bg-[#0B0F19] p-1 rounded-xl border border-white/10 text-xs self-start sm:self-auto overflow-x-auto max-w-full">
           {['ALL', 'PENDING', 'APPROVED', 'REJECTED'].map((st) => (
             <button
@@ -206,7 +234,7 @@ export default function AdminUsers() {
         </div>
       </div>
 
-      {/* 👑 SUPER ADMIN VIEW: FACILITY PROFILE CARDS */}
+      {/* SUPER ADMIN VIEW */}
       {isSuperAdmin && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {loading ? (
@@ -293,13 +321,15 @@ export default function AdminUsers() {
         </div>
       )}
 
-      {/* 🏢 GYM OWNER VIEW: STAFF CREDENTIALS (RESPONSIVE CARDS FOR MOBILE + TABLE FOR DESKTOP) */}
+      {/* GYM OWNER VIEW: TAB 1 (STAFF LIST) */}
       {!isSuperAdmin && activeTab === 'STAFF' && (
         <div className="space-y-4">
           
-          {/* Mobile & Tablet Card List */}
+          {/* Mobile Cards */}
           <div className="lg:hidden space-y-3">
-            {filteredUsers.length === 0 ? (
+            {loading ? (
+              <div className="text-center py-8 text-slate-500 text-xs">Loading staff roster...</div>
+            ) : filteredUsers.length === 0 ? (
               <div className="bg-[#0B0F19] p-8 text-center rounded-2xl border border-white/10 text-slate-500 text-xs font-bold">
                 No staff or trainer accounts created yet.
               </div>
@@ -363,7 +393,7 @@ export default function AdminUsers() {
             )}
           </div>
 
-          {/* Desktop Full Table */}
+          {/* Desktop Table */}
           <div className="hidden lg:block bg-[#0B0F19] rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
             <table className="w-full text-left border-collapse">
               <thead>
@@ -377,41 +407,47 @@ export default function AdminUsers() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5 text-xs">
-                {filteredUsers.map((u) => (
-                  <tr key={u.id} className="hover:bg-white/[0.02]">
-                    <td className="p-4 font-bold text-white">{u.name}</td>
-                    <td className="p-4 text-slate-300 font-mono">{u.email}</td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs text-[#00F2FE] bg-black/40 px-2.5 py-1 rounded-lg border border-white/10">
-                          {visiblePasswords[u.id] ? (u.plain_password || '••••••••') : '••••••••'}
-                        </span>
-                        <button onClick={() => togglePasswordVisibility(u.id)} className="text-slate-400 hover:text-white text-xs">
-                          {visiblePasswords[u.id] ? '🙈' : '👁️'}
-                        </button>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <select value={u.role} onChange={(e) => handleRoleChange(u.id, u.status, e.target.value)} className="bg-[#07090E] border border-white/15 text-xs rounded-xl px-2.5 py-1 text-white">
-                        <option value="TRAINER">🏋️ Trainer</option>
-                        <option value="STAFF">📋 Staff</option>
-                      </select>
-                    </td>
-                    <td className="p-4">
-                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${u.status === 'APPROVED' ? 'text-emerald-400 bg-emerald-500/10' : 'text-amber-400 bg-amber-500/10'}`}>{u.status}</span>
-                    </td>
-                    <td className="p-4 text-right space-x-2">
-                      <button onClick={() => handleDeleteUser(u.id)} className="px-3 py-1.5 bg-red-500/20 text-red-300 font-bold rounded-xl hover:bg-red-500/30">Delete</button>
-                    </td>
-                  </tr>
-                ))}
+                {loading ? (
+                  <tr><td colSpan="6" className="p-8 text-center text-slate-500">Loading roster...</td></tr>
+                ) : filteredUsers.length === 0 ? (
+                  <tr><td colSpan="6" className="p-8 text-center text-slate-500 font-bold">No staff or trainer accounts created yet.</td></tr>
+                ) : (
+                  filteredUsers.map((u) => (
+                    <tr key={u.id} className="hover:bg-white/[0.02]">
+                      <td className="p-4 font-bold text-white">{u.name}</td>
+                      <td className="p-4 text-slate-300 font-mono">{u.email}</td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs text-[#00F2FE] bg-black/40 px-2.5 py-1 rounded-lg border border-white/10">
+                            {visiblePasswords[u.id] ? (u.plain_password || '••••••••') : '••••••••'}
+                          </span>
+                          <button onClick={() => togglePasswordVisibility(u.id)} className="text-slate-400 hover:text-white text-xs">
+                            {visiblePasswords[u.id] ? '🙈' : '👁️'}
+                          </button>
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <select value={u.role} onChange={(e) => handleRoleChange(u.id, u.status, e.target.value)} className="bg-[#07090E] border border-white/15 text-xs rounded-xl px-2.5 py-1 text-white">
+                          <option value="TRAINER">🏋️ Trainer</option>
+                          <option value="STAFF">📋 Staff</option>
+                        </select>
+                      </td>
+                      <td className="p-4">
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${u.status === 'APPROVED' ? 'text-emerald-400 bg-emerald-500/10' : 'text-amber-400 bg-amber-500/10'}`}>{u.status}</span>
+                      </td>
+                      <td className="p-4 text-right space-x-2">
+                        <button onClick={() => handleDeleteUser(u.id)} className="px-3 py-1.5 bg-red-500/20 text-red-300 font-bold rounded-xl hover:bg-red-500/30">Delete</button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {/* 📜 GYM OWNER VIEW: ACTIVITY AUDIT TRAIL (RESPONSIVE CARDS FOR MOBILE + TABLE FOR DESKTOP) */}
+      {/* GYM OWNER VIEW: TAB 2 (ACTIVITY LOGS TRAIL) */}
       {!isSuperAdmin && activeTab === 'LOGS' && (
         <div className="space-y-4">
           
@@ -426,9 +462,10 @@ export default function AdminUsers() {
                   className="bg-[#07090E] border border-white/15 text-xs rounded-xl px-3 py-2 text-white outline-none focus:border-[#00F2FE] w-full"
                 >
                   <option value="ALL">All Actions</option>
-                  <option value="ADDED_MEMBER">➕ Member Added</option>
+                  <option value="REGISTERED_MEMBER">➕ Member Enrolled</option>
                   <option value="UPDATED_MEMBER">✏️ Member Updated</option>
                   <option value="DELETED_MEMBER">🗑️ Member Deleted</option>
+                  <option value="SENT_DUES_REMINDER">📧 Dues Reminder Sent</option>
                   <option value="CREATED_STAFF">👤 Staff Created</option>
                   <option value="UPDATED_STAFF">⚙️ Staff Updated</option>
                   <option value="DELETED_STAFF">🚫 Staff Removed</option>
@@ -443,7 +480,7 @@ export default function AdminUsers() {
                   className="bg-[#07090E] border border-white/15 text-xs rounded-xl px-3 py-2 text-white outline-none focus:border-[#00F2FE] w-full"
                 >
                   <option value="ALL">All Team Members</option>
-                  <option value={user.id}>{user.name} (Gym Owner)</option>
+                  <option value={user?.id}>{user?.name} (Gym Owner)</option>
                   {users.map((u) => (
                     <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
                   ))}
@@ -459,11 +496,13 @@ export default function AdminUsers() {
             </button>
           </div>
 
-          {/* 📱 Mobile Activity Cards (No Table Overflow) */}
+          {/* Mobile Logs Cards */}
           <div className="lg:hidden space-y-3">
-            {logs.length === 0 ? (
+            {loading ? (
+              <div className="text-center py-8 text-slate-500 text-xs">Loading activity logs...</div>
+            ) : logs.length === 0 ? (
               <div className="bg-[#0B0F19] p-8 text-center rounded-2xl border border-white/10 text-slate-500 text-xs font-bold">
-                No activity logs recorded yet.
+                No activity logs recorded yet for this filter.
               </div>
             ) : (
               logs.map((log) => (
@@ -477,7 +516,7 @@ export default function AdminUsers() {
 
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-400">Target Member/Staff:</span>
-                    <strong className="text-[#00F2FE] truncate max-w-[180px]">{log.target_name}</strong>
+                    <strong className="text-[#00F2FE] truncate max-w-[180px]">{log.target_name || '—'}</strong>
                   </div>
 
                   <div className="bg-black/40 p-2.5 rounded-xl border border-white/5 text-xs space-y-1">
@@ -494,7 +533,7 @@ export default function AdminUsers() {
             )}
           </div>
 
-          {/* 🖥️ Desktop Full Table */}
+          {/* Desktop Logs Table */}
           <div className="hidden lg:block bg-[#0B0F19] rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
             <table className="w-full text-left border-collapse">
               <thead>
@@ -507,17 +546,19 @@ export default function AdminUsers() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5 text-xs">
-                {logs.length === 0 ? (
-                  <tr><td colSpan="5" className="p-8 text-center text-slate-500">No activity recorded yet for the selected filters.</td></tr>
+                {loading ? (
+                  <tr><td colSpan="5" className="p-8 text-center text-slate-500">Loading activity trail...</td></tr>
+                ) : logs.length === 0 ? (
+                  <tr><td colSpan="5" className="p-8 text-center text-slate-500 font-bold">No activity recorded yet for the selected filters.</td></tr>
                 ) : (
                   logs.map((log) => (
                     <tr key={log.id} className="hover:bg-white/[0.02] transition-colors">
                       <td className="p-4">{getActionBadge(log.action_type)}</td>
                       <td className="p-4">
                         <div className="font-bold text-white">{log.performed_by_name}</div>
-                        <div className="text-[10px] text-slate-400 font-mono">{log.performed_by_role} • {log.performed_by_email}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">{log.performed_by_role} • {log.performed_by_email || 'N/A'}</div>
                       </td>
-                      <td className="p-4 font-bold text-[#00F2FE]">{log.target_name}</td>
+                      <td className="p-4 font-bold text-[#00F2FE]">{log.target_name || '—'}</td>
                       <td className="p-4 text-slate-300 max-w-xs">{log.details || '—'}</td>
                       <td className="p-4 text-right text-slate-400 font-mono text-[11px] whitespace-nowrap">
                         {formatDateTime(log.created_at)}
