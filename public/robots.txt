@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /dashboard
+
+Sitemap: https://pulsefit-dinesh.vercel.app/sitemap.xml
