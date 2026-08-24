@@ -52,7 +52,7 @@ export default function Members() {
     discount: '0',
     total_amount: '',
     amount_paid: '',
-    payment_mode: 'UPI', // Default payment mode
+    payment_mode: 'UPI',
     start_date: new Date().toISOString().split('T')[0],
     expiry_date: '',
     status: 'ACTIVE',
@@ -60,6 +60,13 @@ export default function Members() {
   });
 
   const [formError, setFormError] = useState('');
+
+  const normalizeMode = (val) => {
+    if (!val) return 'UPI';
+    const str = String(val).trim().toUpperCase();
+    if (str.includes('CASH')) return 'CASH';
+    return 'UPI';
+  };
 
   const fetchPlans = async () => {
     try {
@@ -266,7 +273,7 @@ export default function Members() {
       discount: member.discount ? String(member.discount) : '0',
       total_amount: member.total_amount || member.amount_paid,
       amount_paid: member.amount_paid,
-      payment_mode: member.payment_mode || 'UPI',
+      payment_mode: normalizeMode(member.payment_mode),
       start_date: member.start_date ? member.start_date.split('T')[0] : '',
       expiry_date: member.expiry_date ? member.expiry_date.split('T')[0] : '',
       status: member.status,
@@ -275,17 +282,23 @@ export default function Members() {
     setIsModalOpen(true);
   };
 
+  // Submit Handler
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError('');
     stopLiveCamera();
 
+    const payload = {
+      ...formData,
+      payment_mode: normalizeMode(formData.payment_mode)
+    };
+
     try {
       if (editingMember) {
-        await API.put(`/members/${editingMember.id}`, formData);
+        await API.put(`/members/${editingMember.id}`, payload);
         setActionMessage({ text: 'Member updated successfully!', type: 'success' });
       } else {
-        await API.post('/members', formData);
+        await API.post('/members', payload);
         setActionMessage({ 
           text: formData.email 
             ? `Member registered! Access QR badge sent directly to ${formData.email}`
@@ -321,10 +334,10 @@ export default function Members() {
       `This is a friendly reminder regarding your pending membership balance at *${facility}*.\n\n` +
       `📋 *Plan:* ${member.plan_type}\n` +
       `💰 *Total Agreed Fee:* ₹${Number(member.total_amount).toLocaleString('en-IN')}\n` +
-      `✅ *Amount Paid:* ₹${Number(member.amount_paid).toLocaleString('en-IN')} (${member.payment_mode || 'UPI'})\n` +
+      `✅ *Amount Paid:* ₹${Number(member.amount_paid).toLocaleString('en-IN')} (${normalizeMode(member.payment_mode)})\n` +
       `⚠️ *Outstanding Balance Due:* ₹${Number(member.balance_due).toLocaleString('en-IN')}\n` +
       `📅 *Expiration Date:* ${formatDate(member.expiry_date)}\n\n` +
-      `Kindly settle your dues at the gym front desk to maintain uninterrupted access. Thank you! 💪`;
+      `Kindly settle your dues at the gym front desk. Thank you! 💪`;
 
     window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`, '_blank');
   };
@@ -408,7 +421,7 @@ export default function Members() {
     if (statusFilter === 'DUES' && !(Number(member.balance_due) > 0)) return false;
 
     if (planFilter !== 'ALL' && member.plan_type !== planFilter) return false;
-    if (paymentModeFilter !== 'ALL' && (member.payment_mode || 'UPI') !== paymentModeFilter) return false;
+    if (paymentModeFilter !== 'ALL' && normalizeMode(member.payment_mode) !== paymentModeFilter) return false;
 
     return true;
   });
@@ -481,15 +494,15 @@ export default function Members() {
           />
         </div>
 
-        {/* Payment Mode Filter */}
+        {/* Channel Filter */}
         <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400 font-bold">Payment Mode:</span>
+          <span className="text-xs text-slate-400 font-bold">Payment Channel:</span>
           <select
             value={paymentModeFilter}
             onChange={(e) => setPaymentModeFilter(e.target.value)}
             className="bg-[#0B0F19] border border-white/15 px-3 py-2 rounded-xl text-xs text-white outline-none focus:border-[#00F2FE]"
           >
-            <option value="ALL">All Modes (Cash & UPI)</option>
+            <option value="ALL">All Channels (Cash & UPI)</option>
             <option value="CASH">💵 Cash Only</option>
             <option value="UPI">📱 UPI / Online Only</option>
           </select>
@@ -503,88 +516,91 @@ export default function Members() {
         ) : filteredMembers.length === 0 ? (
           <div className="col-span-full text-center py-12 text-slate-500 font-bold bg-[#0B0F19] rounded-3xl border border-white/10 text-xs">No members found matching filters.</div>
         ) : (
-          filteredMembers.map((member) => (
-            <div key={member.id} className="bg-[#0B0F19] p-4 sm:p-5 rounded-3xl border border-white/10 flex flex-col justify-between hover:border-[#00F2FE]/40 transition-all shadow-xl">
-              <div>
-                <div className="flex justify-between items-start mb-2.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full bg-white/10 text-[#00F2FE]">
-                      {formatPlanLabel(member.plan_type)}
-                    </span>
-                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${member.payment_mode === 'CASH' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30' : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'}`}>
-                      {member.payment_mode === 'CASH' ? '💵 Cash' : '📱 UPI'}
-                    </span>
+          filteredMembers.map((member) => {
+            const mode = normalizeMode(member.payment_mode);
+            return (
+              <div key={member.id} className="bg-[#0B0F19] p-4 sm:p-5 rounded-3xl border border-white/10 flex flex-col justify-between hover:border-[#00F2FE]/40 transition-all shadow-xl">
+                <div>
+                  <div className="flex justify-between items-start mb-2.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full bg-white/10 text-[#00F2FE]">
+                        {formatPlanLabel(member.plan_type)}
+                      </span>
+                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${mode === 'CASH' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30' : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'}`}>
+                        {mode === 'CASH' ? '💵 Cash' : '📱 UPI'}
+                      </span>
+                    </div>
+
+                    {Number(member.balance_due) > 0 ? (
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-mono">
+                        Due: ₹{Number(member.balance_due).toLocaleString('en-IN')}
+                      </span>
+                    ) : (
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Paid</span>
+                    )}
                   </div>
 
-                  {Number(member.balance_due) > 0 ? (
-                    <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-mono">
-                      Due: ₹{Number(member.balance_due).toLocaleString('en-IN')}
-                    </span>
-                  ) : (
-                    <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">Paid</span>
+                  <div className="flex gap-3.5 items-center my-2">
+                    <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-black/60 overflow-hidden border border-white/15 flex-shrink-0 flex items-center justify-center">
+                      {member.photo_url ? (
+                        <img src={member.photo_url} alt={member.full_name} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="font-bold text-slate-500 text-lg">{member.full_name?.charAt(0)}</div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-white font-bold text-xs sm:text-sm truncate">{member.full_name}</h3>
+                      <p className="text-slate-400 text-xs font-mono">{member.phone}</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Paid: <span className="text-emerald-400 font-bold font-mono">₹{Number(member.amount_paid).toLocaleString('en-IN')}</span> / ₹{Number(member.total_amount || member.amount_paid).toLocaleString('en-IN')}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Dues Reminder */}
+                  {Number(member.balance_due) > 0 && !isSuperAdmin && (
+                    <div className="mt-3 p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-between gap-1.5">
+                      <span className="text-[9px] font-bold text-rose-400">Remind:</span>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => sendWhatsAppDueReminder(member)}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-bold text-[10px] flex items-center gap-1 transition-all"
+                        >
+                          <span>💬</span> WhatsApp
+                        </button>
+                        <button
+                          onClick={() => sendEmailDueReminder(member)}
+                          className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 font-bold text-[10px] flex items-center gap-1 transition-all"
+                        >
+                          <span>📧</span> Email
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
 
-                <div className="flex gap-3.5 items-center my-2">
-                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-black/60 overflow-hidden border border-white/15 flex-shrink-0 flex items-center justify-center">
-                    {member.photo_url ? (
-                      <img src={member.photo_url} alt={member.full_name} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="font-bold text-slate-500 text-lg">{member.full_name?.charAt(0)}</div>
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-white font-bold text-xs sm:text-sm truncate">{member.full_name}</h3>
-                    <p className="text-slate-400 text-xs font-mono">{member.phone}</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Paid: <span className="text-emerald-400 font-bold font-mono">₹{Number(member.amount_paid).toLocaleString('en-IN')}</span> / ₹{Number(member.total_amount || member.amount_paid).toLocaleString('en-IN')}
-                    </p>
-                  </div>
+                {/* Action Buttons */}
+                <div className="grid grid-cols-4 gap-1.5 pt-3 mt-2 border-t border-white/5">
+                  <button onClick={() => setQrMember(member)} className="py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-[#00F2FE] text-xs font-bold transition-all">
+                    🪪 QR Pass
+                  </button>
+                  <button onClick={() => setViewMember(member)} className="py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white text-xs font-bold transition-all">
+                    👁️ Info
+                  </button>
+                  {!isSuperAdmin && (
+                    <>
+                      <button onClick={() => handleOpenEditModal(member)} className="py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-bold transition-all">
+                        ✏️ Edit
+                      </button>
+                      <button onClick={() => handleDeleteMember(member.id)} className="py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold transition-all">
+                        🗑️
+                      </button>
+                    </>
+                  )}
                 </div>
-
-                {/* Dues Reminder Buttons */}
-                {Number(member.balance_due) > 0 && !isSuperAdmin && (
-                  <div className="mt-3 p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-between gap-1.5">
-                    <span className="text-[9px] font-bold text-rose-400">Remind:</span>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => sendWhatsAppDueReminder(member)}
-                        className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-bold text-[10px] flex items-center gap-1 transition-all"
-                      >
-                        <span>💬</span> WhatsApp
-                      </button>
-                      <button
-                        onClick={() => sendEmailDueReminder(member)}
-                        className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 font-bold text-[10px] flex items-center gap-1 transition-all"
-                      >
-                        <span>📧</span> Email
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
-
-              {/* Action Buttons */}
-              <div className="grid grid-cols-4 gap-1.5 pt-3 mt-2 border-t border-white/5">
-                <button onClick={() => setQrMember(member)} className="py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-[#00F2FE] text-xs font-bold transition-all">
-                  🪪 QR Pass
-                </button>
-                <button onClick={() => setViewMember(member)} className="py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-slate-300 hover:text-white text-xs font-bold transition-all">
-                  👁️ Info
-                </button>
-                {!isSuperAdmin && (
-                  <>
-                    <button onClick={() => handleOpenEditModal(member)} className="py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-bold transition-all">
-                      ✏️ Edit
-                    </button>
-                    <button onClick={() => handleDeleteMember(member.id)} className="py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold transition-all">
-                      🗑️
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
@@ -646,7 +662,7 @@ export default function Members() {
             </div>
 
             <div className="p-3.5 rounded-2xl bg-black/40 border border-white/5 space-y-2 text-xs">
-              <div className="flex justify-between"><span className="text-slate-400">Payment Mode:</span><span className="font-bold text-[#00F2FE]">{viewMember.payment_mode || 'UPI'}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Payment Channel:</span><span className="font-bold text-[#00F2FE]">{normalizeMode(viewMember.payment_mode)}</span></div>
               <div className="flex justify-between"><span className="text-slate-400">Gender:</span><span className="text-white font-bold">{viewMember.gender || '—'}</span></div>
               <div className="flex justify-between"><span className="text-slate-400">Date of Birth:</span><span className="text-white">{viewMember.dob ? formatDate(viewMember.dob) : '—'}</span></div>
               <div className="flex justify-between"><span className="text-slate-400">Phone:</span><span className="font-mono text-white">{viewMember.phone}</span></div>
@@ -830,11 +846,11 @@ export default function Members() {
 
                 {/* 💳 PAYMENT MODE DROPDOWN */}
                 <div className="col-span-full">
-                  <label className="block text-[10px] font-bold text-[#00F2FE] uppercase mb-1">Payment Method / Mode *</label>
+                  <label className="block text-[10px] font-bold text-[#00F2FE] uppercase mb-1">Payment Method / Channel *</label>
                   <select
                     value={formData.payment_mode}
                     onChange={(e) => setFormData({ ...formData, payment_mode: e.target.value })}
-                    className="w-full bg-[#07090E] border border-[#00F2FE]/40 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none font-bold"
+                    className="w-full bg-[#07090E] border border-[#00F2FE]/40 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none font-bold cursor-pointer"
                   >
                     <option value="UPI">📱 UPI / Online Transfer (GPay, PhonePe, Paytm, Bank)</option>
                     <option value="CASH">💵 Cash (Physical Currency Handover)</option>

@@ -34,6 +34,14 @@ export default function Dashboard() {
     fetchAnalytics();
   }, []);
 
+  // Safe payment mode parser (Handles "Cash", "CASH", "cash ", null, undefined)
+  const normalizeMode = (val) => {
+    if (!val) return 'UPI';
+    const str = String(val).trim().toUpperCase();
+    if (str.includes('CASH')) return 'CASH';
+    return 'UPI';
+  };
+
   const toLocalDateString = (dateObj) => {
     if (!dateObj) return '';
     const d = new Date(dateObj);
@@ -50,8 +58,7 @@ export default function Dashboard() {
   const paymentFilteredMembers = useMemo(() => {
     if (paymentModeFilter === 'ALL') return allMembers;
     return allMembers.filter((m) => {
-      const mode = String(m.payment_mode || 'UPI').trim().toUpperCase();
-      return mode === paymentModeFilter;
+      return normalizeMode(m.payment_mode) === paymentModeFilter;
     });
   }, [allMembers, paymentModeFilter]);
 
@@ -81,7 +88,7 @@ export default function Dashboard() {
     });
   }, [paymentFilteredMembers, selectedPeriod]);
 
-  // 3. Dynamic Financial Metrics for the Top 4 Cards
+  // 3. Dynamic Financial Metrics for Current Timeframe & Selected Channel
   const currentPeriodMetrics = useMemo(() => {
     let collected = 0;
     let dues = 0;
@@ -113,7 +120,7 @@ export default function Dashboard() {
     };
   }, [currentMembersInPeriod, selectedPeriod]);
 
-  // 4. Overall Lifetime Metrics
+  // 4. Overall Financial Metrics
   const overall = useMemo(() => {
     let collected = 0;
     let dues = 0;
@@ -173,7 +180,7 @@ export default function Dashboard() {
     ];
   }, [paymentFilteredMembers]);
 
-  // 6. Pie Chart Breakdown
+  // 6. Pie Chart Data
   const revenueVsDuesPieData = [
     { name: 'Collected Revenue', value: Number(overall.totalCollected), color: '#10B981' },
     { name: 'Pending Dues', value: Number(overall.totalPendingDues), color: '#F43F5E' }
@@ -210,7 +217,7 @@ export default function Dashboard() {
     return trend;
   }, [paymentFilteredMembers]);
 
-  // 8. Period Comparison Bar Chart
+  // 8. Period Comparison Bar Chart Data
   const periodicComparisonData = useMemo(() => {
     const calcWindow = (days) => {
       const now = new Date();
@@ -384,7 +391,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 💰 Metric Cards: Correctly Tied to Selected Timeframe & Channel */}
+      {/* 💰 Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <div className="bg-[#0B0F19] p-5 sm:p-6 rounded-3xl border border-emerald-500/30 relative overflow-hidden shadow-xl group hover:border-emerald-500/60 transition-all">
           <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-full blur-2xl group-hover:scale-125 transition-transform pointer-events-none"></div>
@@ -573,7 +580,7 @@ export default function Dashboard() {
 
       </div>
 
-      {/* 📊 SECTION 3: PLAN-WISE REVENUE & ROSTER */}
+      {/* 📊 SECTION 3: PLAN-WISE REVENUE & ACTIVE HORIZON ROSTER */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         {/* Plan Yield */}
@@ -634,7 +641,7 @@ export default function Dashboard() {
             ) : (
               currentMembersInPeriod.slice(0, 6).map((m) => {
                 const due = Number(m.balance_due) || 0;
-                const mode = String(m.payment_mode || 'UPI').trim().toUpperCase();
+                const mode = normalizeMode(m.payment_mode);
 
                 return (
                   <div key={m.id} className="bg-black/50 p-4 rounded-2xl border border-white/10 space-y-3 shadow-md hover:border-[#00F2FE]/30 transition-all">
@@ -709,7 +716,7 @@ export default function Dashboard() {
                 ) : (
                   currentMembersInPeriod.slice(0, 6).map((m) => {
                     const due = Number(m.balance_due) || 0;
-                    const mode = String(m.payment_mode || 'UPI').trim().toUpperCase();
+                    const mode = normalizeMode(m.payment_mode);
 
                     return (
                       <tr key={m.id} className="hover:bg-white/[0.02] transition-colors">
@@ -729,8 +736,8 @@ export default function Dashboard() {
                         <td className="py-3 px-3">
                           <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border whitespace-nowrap ${
                             mode === 'CASH'
-                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                              : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                              ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                              : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
                           }`}>
                             {mode === 'CASH' ? '💵 Cash' : '📱 UPI'}
                           </span>
