@@ -374,7 +374,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="flex bg-[#0B0F19] p-1.5 rounded-2xl border border-white/10 overflow-x-auto max-w-full gap-1.5 scrollbar-none">
+        <div className="flex bg-[#0B0F19] p-1.5 rounded-2xl border border-white/10 overflow-x-auto max-w-full gap-1.5 scrollbar-none" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           {periodButtons.map((btn) => (
             <button
               key={btn.id}
@@ -609,7 +609,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Responsive Active Horizon Roster */}
+        {/* Responsive Active Horizon Roster with Hidden Scrollbar */}
         <div className="lg:col-span-7 bg-[#0B0F19] p-5 sm:p-7 rounded-3xl border border-white/10 shadow-2xl flex flex-col justify-between space-y-4">
           
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-white/10">
@@ -632,14 +632,17 @@ export default function Dashboard() {
             </button>
           </div>
 
-          {/* Mobile Cards (< 768px) */}
-          <div className="block md:hidden space-y-3">
+          {/* Mobile Cards (< 768px) - Scrollable with hidden scrollbar */}
+          <div 
+            className="block md:hidden space-y-3 max-h-[360px] overflow-y-auto pr-1"
+            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          >
             {currentMembersInPeriod.length === 0 ? (
               <div className="p-8 text-center bg-black/40 rounded-2xl border border-white/5 text-slate-500 font-bold text-xs">
                 No member enrollments recorded during {currentPeriodMetrics.label.toLowerCase()} for {paymentModeFilter === 'ALL' ? 'any channel' : paymentModeFilter}.
               </div>
             ) : (
-              currentMembersInPeriod.slice(0, 6).map((m) => {
+              currentMembersInPeriod.map((m) => {
                 const due = Number(m.balance_due) || 0;
                 const mode = normalizeMode(m.payment_mode);
 
@@ -692,10 +695,13 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* Desktop Table (>= 768px) */}
-          <div className="hidden md:block overflow-hidden rounded-2xl border border-white/10 bg-black/30">
+          {/* Desktop Table (>= 768px) - Scrollable with hidden scrollbar */}
+          <div 
+            className="hidden md:block overflow-y-auto max-h-[360px] rounded-2xl border border-white/10 bg-black/30"
+            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          >
             <table className="w-full text-left text-xs">
-              <thead className="bg-white/5 text-[10px] uppercase tracking-wider text-slate-400 font-bold border-b border-white/10">
+              <thead className="bg-white/5 text-[10px] uppercase tracking-wider text-slate-400 font-bold border-b border-white/10 sticky top-0 backdrop-blur-md z-10">
                 <tr>
                   <th className="py-3 px-3.5">Athlete</th>
                   <th className="py-3 px-3">Plan</th>
@@ -714,7 +720,7 @@ export default function Dashboard() {
                     </td>
                   </tr>
                 ) : (
-                  currentMembersInPeriod.slice(0, 6).map((m) => {
+                  currentMembersInPeriod.map((m) => {
                     const due = Number(m.balance_due) || 0;
                     const mode = normalizeMode(m.payment_mode);
 

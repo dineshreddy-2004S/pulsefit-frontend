@@ -52,3 +52,13 @@ body {
   box-shadow: 0 0 15px rgba(0, 242, 254, 0.2);
   outline: none;
 }
+
+/* Hide scrollbar while preserving scroll functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}

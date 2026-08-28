@@ -10,6 +10,7 @@ export default function Members() {
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const qrSvgWrapperRef = useRef(null);
 
   const [members, setMembers] = useState([]);
   const [plans, setPlans] = useState([]);
@@ -80,6 +81,7 @@ export default function Members() {
   const calculateExpiryDate = (startDateStr, planType, customMonthsVal) => {
     if (!startDateStr) return '';
     const date = new Date(startDateStr);
+    if (isNaN(date.getTime())) return '';
 
     if (planType === 'DAILY') date.setDate(date.getDate() + 1);
     else if (planType === 'MONTHLY') date.setMonth(date.getMonth() + 1);
@@ -88,37 +90,41 @@ export default function Members() {
     else if (planType === 'HALF_YEARLY') date.setMonth(date.getMonth() + 6);
     else if (planType === 'ANNUAL') date.setFullYear(date.getFullYear() + 1);
     else if (planType === 'CUSTOM') {
-      const months = Math.max(1, parseInt(customMonthsVal) || 1);
+      const months = Math.max(1, parseInt(customMonthsVal, 10) || 1);
       date.setMonth(date.getMonth() + months);
     }
     return date.toISOString().split('T')[0];
   };
 
+  // When plan changes -> update standard base price, subtract existing discount, auto-update amount_paid
   const handlePlanChange = (newPlan) => {
     const matchedPlan = plans.find(p => p.plan_type === newPlan);
     const planBasePrice = matchedPlan ? Number(matchedPlan.price) : 0;
     const discountVal = Number(formData.discount) || 0;
-    const computedTotal = Math.max(0, planBasePrice - discountVal);
+    const netTotal = Math.max(0, planBasePrice - discountVal);
     const updatedExpiry = calculateExpiryDate(formData.start_date, newPlan, formData.custom_months);
 
     setFormData(prev => ({
       ...prev,
       plan_type: newPlan,
       base_price: planBasePrice > 0 ? planBasePrice : prev.base_price,
-      total_amount: computedTotal > 0 ? computedTotal : prev.total_amount,
+      total_amount: netTotal,
+      amount_paid: netTotal, // Default amount paid to net fee
       expiry_date: updatedExpiry
     }));
   };
 
+  // When discount changes -> Net total = Base Price - Discount, auto-update amount_paid
   const handleDiscountChange = (discountStr) => {
     const disc = Number(discountStr) || 0;
     const base = Number(formData.base_price) || 0;
-    const computedTotal = Math.max(0, base - disc);
+    const netTotal = Math.max(0, base - disc);
 
     setFormData(prev => ({
       ...prev,
       discount: discountStr,
-      total_amount: computedTotal
+      total_amount: netTotal,
+      amount_paid: netTotal // Automatically reflect discounted amount
     }));
   };
 
@@ -193,13 +199,13 @@ export default function Members() {
       setLoading(true);
       if (isSuperAdmin) {
         const res = await API.get('/members');
-        setMembers(res.data);
+        setMembers(Array.isArray(res.data) ? res.data : []);
       } else {
         const res = await API.get('/members/status-summary');
-        setSummary(res.data.summary || { 
+        setSummary(res.data?.summary || { 
           total: 0, activeCount: 0, expiredCount: 0, expiringSoonCount: 0, totalDuesAmount: 0, dueMembersCount: 0
         });
-        const allList = [...(res.data.activeMembers || []), ...(res.data.expiredMembers || [])];
+        const allList = [...(res.data?.activeMembers || []), ...(res.data?.expiredMembers || [])];
         setMembers(allList);
       }
     } catch (err) {
@@ -227,7 +233,7 @@ export default function Members() {
     const today = new Date().toISOString().split('T')[0];
     const initialExpiry = calculateExpiryDate(today, 'MONTHLY', '1');
     const monthlyPlan = plans.find(p => p.plan_type === 'MONTHLY');
-    const basePrice = monthlyPlan ? monthlyPlan.price : 1000;
+    const basePrice = monthlyPlan ? Number(monthlyPlan.price) : 1000;
 
     setFormData({
       full_name: '',
@@ -261,28 +267,32 @@ export default function Members() {
     stopLiveCamera();
     setEditingMember(member);
     setFormError('');
+    
+    const rawTotal = Number(member.total_amount) || 0;
+    const rawDisc = Number(member.discount) || 0;
+    const originalBase = rawTotal + rawDisc;
+
     setFormData({
-      full_name: member.full_name,
+      full_name: member.full_name || '',
       email: member.email || '',
-      phone: member.phone,
+      phone: member.phone || '',
       gender: member.gender || 'MALE',
       dob: member.dob ? member.dob.split('T')[0] : '',
       plan_type: member.plan_type || 'MONTHLY',
       custom_months: member.custom_months ? String(member.custom_months) : '1',
-      base_price: (Number(member.total_amount) || 0) + (Number(member.discount) || 0),
+      base_price: originalBase > 0 ? originalBase : rawTotal,
       discount: member.discount ? String(member.discount) : '0',
-      total_amount: member.total_amount || member.amount_paid,
+      total_amount: member.total_amount,
       amount_paid: member.amount_paid,
       payment_mode: normalizeMode(member.payment_mode),
       start_date: member.start_date ? member.start_date.split('T')[0] : '',
       expiry_date: member.expiry_date ? member.expiry_date.split('T')[0] : '',
-      status: member.status,
+      status: member.status || 'ACTIVE',
       photo_url: member.photo_url || ''
     });
     setIsModalOpen(true);
   };
 
-  // Submit Handler
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError('');
@@ -301,7 +311,7 @@ export default function Members() {
         await API.post('/members', payload);
         setActionMessage({ 
           text: formData.email 
-            ? `Member registered! Access QR badge sent directly to ${formData.email}`
+            ? `Member registered! Access QR badge sent to ${formData.email}`
             : `Member registered successfully!`, 
           type: 'success' 
         });
@@ -326,14 +336,14 @@ export default function Members() {
 
   const sendWhatsAppDueReminder = (member) => {
     const facility = user?.gym_name || 'Pulse Fit Hub';
-    let cleanPhone = member.phone.replace(/[^0-9]/g, '');
+    let cleanPhone = (member.phone || '').replace(/[^0-9]/g, '');
     if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
 
     const text = `*Payment Reminder from ${facility.toUpperCase()}*\n\n` +
       `Hello *${member.full_name}*,\n` +
       `This is a friendly reminder regarding your pending membership balance at *${facility}*.\n\n` +
       `📋 *Plan:* ${member.plan_type}\n` +
-      `💰 *Total Agreed Fee:* ₹${Number(member.total_amount).toLocaleString('en-IN')}\n` +
+      `💰 *Net Agreed Fee:* ₹${Number(member.total_amount).toLocaleString('en-IN')}\n` +
       `✅ *Amount Paid:* ₹${Number(member.amount_paid).toLocaleString('en-IN')} (${normalizeMode(member.payment_mode)})\n` +
       `⚠️ *Outstanding Balance Due:* ₹${Number(member.balance_due).toLocaleString('en-IN')}\n` +
       `📅 *Expiration Date:* ${formatDate(member.expiry_date)}\n\n` +
@@ -356,37 +366,97 @@ export default function Members() {
     }
   };
 
-  const shareAttendanceQRWhatsApp = (member) => {
+  const getLivePassUrl = (id) => {
     const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     const baseUrl = isLocal ? `http://${window.location.host}` : 'https://pulsefit-dinesh.vercel.app';
-    const passUrl = `${baseUrl}/pass/${member.id}`;
-    const facility = user?.gym_name || 'Pulse Fit Hub';
+    return `${baseUrl}/pass/${id}`;
+  };
 
-    let cleanPhone = member.phone.replace(/[^0-9]/g, '');
+  // Convert rendered SVG QR code to a high-res PNG Canvas
+  const generateQrImageBlob = async () => {
+    return new Promise((resolve, reject) => {
+      const svgElement = qrSvgWrapperRef.current?.querySelector('svg');
+      if (!svgElement) return reject(new Error('QR SVG not found'));
+
+      const svgString = new XMLSerializer().serializeToString(svgElement);
+      const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+      const URLObj = window.URL || window.webkitURL || window;
+      const blobURL = URLObj.createObjectURL(svgBlob);
+
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 600;
+        canvas.height = 600;
+        const ctx = canvas.getContext('2d');
+        
+        // Background card fill
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, 600, 600);
+        ctx.drawImage(img, 50, 50, 500, 500);
+
+        canvas.toBlob((blob) => {
+          URLObj.revokeObjectURL(blobURL);
+          if (blob) resolve(blob);
+          else reject(new Error('Canvas to Blob conversion failed'));
+        }, 'image/png');
+      };
+      img.onerror = (e) => reject(e);
+      img.src = blobURL;
+    });
+  };
+
+  // ⚡ Directly shares QR Pass as a PNG image to WhatsApp
+  const shareAttendanceQRWhatsApp = async (member) => {
+    const passUrl = getLivePassUrl(member.id);
+    const facility = user?.gym_name || 'Pulse Fit Hub';
+    let cleanPhone = (member.phone || '').replace(/[^0-9]/g, '');
     if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
 
-    const text = `*${facility.toUpperCase()} - Official Attendance Access Pass*\n\n` +
+    const messageText = `*${facility.toUpperCase()} - Official Attendance Access Pass*\n\n` +
       `Hello *${member.full_name}*,\n` +
-      `Here is your digital check-in QR code for daily gym attendance.\n\n` +
+      `Here is your digital check-in QR code pass for gym attendance.\n\n` +
       `🪪 *Athlete ID:* #PF-${String(member.id).padStart(5, '0')}\n` +
       `⚡ *Tier:* ${member.plan_type}\n` +
       `📅 *Valid Until:* ${formatDate(member.expiry_date)}\n\n` +
-      `👉 *Open your Live Pass & QR Code:*\n${passUrl}\n\n` +
-      `Present this badge to the scanner upon arrival! 💪`;
+      `👉 *Live Digital Pass:* ${passUrl}\n\n` +
+      `Present this QR badge at the front desk for scanning! 💪`;
 
-    window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`, '_blank');
+    try {
+      const qrBlob = await generateQrImageBlob();
+      const qrFile = new File([qrBlob], `PulseFit_Pass_${member.full_name.replace(/\s+/g, '_')}.png`, { type: 'image/png' });
+
+      // If Web Share API supports file attachments (Mobile Browsers / Modern Desktops)
+      if (navigator.canShare && navigator.canShare({ files: [qrFile] })) {
+        await navigator.share({
+          files: [qrFile],
+          title: `${facility} Attendance QR Pass`,
+          text: messageText
+        });
+        return;
+      }
+    } catch (err) {
+      console.warn('Direct file sharing error or dismissed, falling back:', err);
+    }
+
+    // Fallback: Download QR image automatically & open WhatsApp with pre-filled message
+    try {
+      const qrBlob = await generateQrImageBlob();
+      const downloadLink = document.createElement('a');
+      downloadLink.href = URL.createObjectURL(qrBlob);
+      downloadLink.download = `${member.full_name}_QR_Pass.png`;
+      downloadLink.click();
+    } catch (e) {
+      console.error('Download error:', e);
+    }
+
+    window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(messageText)}`, '_blank');
   };
 
   const calculatedBalance = Math.max(
     0,
     (Number(formData.total_amount) || 0) - (Number(formData.amount_paid) || 0)
   );
-
-  const getLivePassUrl = (id) => {
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    const baseUrl = isLocal ? `http://${window.location.host}` : 'https://pulsefit-dinesh.vercel.app';
-    return `${baseUrl}/pass/${id}`;
-  };
 
   const formatPlanLabel = (plan) => {
     switch (plan) {
@@ -397,23 +467,29 @@ export default function Members() {
       case 'HALF_YEARLY': return '🗓️ 6 Months';
       case 'ANNUAL': return '👑 1 Year';
       case 'CUSTOM': return '⚙️ Custom';
-      default: return plan;
+      default: return plan || '—';
     }
   };
 
   const filteredMembers = members.filter((member) => {
+    if (!member) return false;
+
     const matchesSearch =
-      member.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      member.phone?.includes(searchTerm) ||
-      member.email?.toLowerCase().includes(searchTerm.toLowerCase());
+      (member.full_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (member.phone || '').includes(searchTerm) ||
+      (member.email || '').toLowerCase().includes(searchTerm.toLowerCase());
 
     if (!matchesSearch) return false;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const exp = new Date(member.expiry_date);
-    exp.setHours(0, 0, 0, 0);
-    const daysLeft = Math.ceil((exp - today) / (1000 * 60 * 60 * 24));
+
+    const exp = member.expiry_date ? new Date(member.expiry_date) : null;
+    let daysLeft = -999;
+    if (exp && !isNaN(exp.getTime())) {
+      exp.setHours(0, 0, 0, 0);
+      daysLeft = Math.ceil((exp.getTime() - today.getTime()) / 86400000);
+    }
 
     if (statusFilter === 'ACTIVE' && daysLeft < 0) return false;
     if (statusFilter === 'EXPIRING_SOON' && !(daysLeft >= 0 && daysLeft <= 7)) return false;
@@ -545,14 +621,14 @@ export default function Members() {
                       {member.photo_url ? (
                         <img src={member.photo_url} alt={member.full_name} className="w-full h-full object-cover" />
                       ) : (
-                        <div className="font-bold text-slate-500 text-lg">{member.full_name?.charAt(0)}</div>
+                        <div className="font-bold text-slate-500 text-lg">{(member.full_name || '?').charAt(0)}</div>
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
                       <h3 className="text-white font-bold text-xs sm:text-sm truncate">{member.full_name}</h3>
                       <p className="text-slate-400 text-xs font-mono">{member.phone}</p>
                       <p className="text-[11px] text-slate-400 mt-0.5">
-                        Paid: <span className="text-emerald-400 font-bold font-mono">₹{Number(member.amount_paid).toLocaleString('en-IN')}</span> / ₹{Number(member.total_amount || member.amount_paid).toLocaleString('en-IN')}
+                        Paid: <span className="text-emerald-400 font-bold font-mono">₹{Number(member.amount_paid).toLocaleString('en-IN')}</span> / ₹{Number(member.total_amount).toLocaleString('en-IN')}
                       </p>
                     </div>
                   </div>
@@ -604,7 +680,7 @@ export default function Members() {
         )}
       </div>
 
-      {/* QR MODAL */}
+      {/* QR MODAL WITH DIRECT WHATSAPP IMAGE SHARE */}
       {qrMember && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-[#0B0F19] w-full max-w-sm p-6 rounded-3xl border border-white/20 text-center relative shadow-2xl space-y-3">
@@ -614,7 +690,7 @@ export default function Members() {
             <h3 className="text-lg font-black text-white">{qrMember.full_name}</h3>
             <p className="text-xs text-slate-400 font-mono mb-2">#PF-{String(qrMember.id).padStart(5, '0')}</p>
 
-            <div className="bg-white p-4 rounded-2xl w-fit mx-auto shadow-xl border-4 border-[#00F2FE]/40">
+            <div ref={qrSvgWrapperRef} className="bg-white p-4 rounded-2xl w-fit mx-auto shadow-xl border-4 border-[#00F2FE]/40">
               <QRCodeSVG 
                 value={getLivePassUrl(qrMember.id)} 
                 size={180} 
@@ -627,10 +703,11 @@ export default function Members() {
 
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
+                type="button"
                 onClick={() => shareAttendanceQRWhatsApp(qrMember)}
-                className="py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 border border-emerald-500/30 transition-all"
+                className="py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 border border-emerald-500/30 transition-all active:scale-95"
               >
-                <span>💬</span> Share Pass
+                <span>💬</span> Share QR Pass
               </button>
               <button onClick={() => window.print()} className="py-2.5 rounded-xl bg-gradient-to-r from-[#00F2FE] to-[#7928CA] text-white font-bold text-xs">
                 Print Badge
@@ -640,47 +717,61 @@ export default function Members() {
         </div>
       )}
 
-      {/* VIEW MEMBER INFO MODAL */}
-      {viewMember && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0B0F19] w-full max-w-md p-6 rounded-3xl border border-white/20 relative shadow-2xl space-y-4">
-            <button onClick={() => setViewMember(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white text-base">✕</button>
-            
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-black/60 overflow-hidden border border-white/15 flex-shrink-0 flex items-center justify-center">
-                {viewMember.photo_url ? (
-                  <img src={viewMember.photo_url} alt={viewMember.full_name} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="font-bold text-slate-500 text-xl">{viewMember.full_name?.charAt(0)}</div>
-                )}
-              </div>
-              <div>
-                <h3 className="text-lg font-black text-white">{viewMember.full_name}</h3>
-                <p className="text-xs text-slate-400 font-mono">#PF-{String(viewMember.id).padStart(5, '0')}</p>
-                <span className="text-[10px] font-bold text-[#00F2FE] uppercase">{formatPlanLabel(viewMember.plan_type)}</span>
-              </div>
-            </div>
+      {/* VIEW MEMBER INFO MODAL (WITH ACCURATE FEE - DISCOUNT BREAKDOWN) */}
+      {viewMember && (() => {
+        const netAgreed = Number(viewMember.total_amount) || 0;
+        const discountVal = Number(viewMember.discount) || 0;
+        const standardPlanFee = netAgreed + discountVal;
+        const paidVal = Number(viewMember.amount_paid) || 0;
+        const dueVal = Number(viewMember.balance_due) || 0;
 
-            <div className="p-3.5 rounded-2xl bg-black/40 border border-white/5 space-y-2 text-xs">
-              <div className="flex justify-between"><span className="text-slate-400">Payment Channel:</span><span className="font-bold text-[#00F2FE]">{normalizeMode(viewMember.payment_mode)}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Gender:</span><span className="text-white font-bold">{viewMember.gender || '—'}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Date of Birth:</span><span className="text-white">{viewMember.dob ? formatDate(viewMember.dob) : '—'}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Phone:</span><span className="font-mono text-white">{viewMember.phone}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Email:</span><span className="text-white">{viewMember.email || '—'}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Start Date:</span><span className="text-white">{formatDate(viewMember.start_date)}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Expiry Date:</span><span className="text-amber-400 font-bold">{formatDate(viewMember.expiry_date)}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Total Fee:</span><span className="font-mono text-white">₹{Number(viewMember.total_amount).toLocaleString('en-IN')}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Amount Paid:</span><span className="font-mono text-emerald-400 font-bold">₹{Number(viewMember.amount_paid).toLocaleString('en-IN')}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Discount Given:</span><span className="font-mono text-amber-300 font-bold">₹{Number(viewMember.discount || 0).toLocaleString('en-IN')}</span></div>
-              <div className="flex justify-between"><span className="text-slate-400">Remaining Due:</span><span className="font-mono text-rose-400 font-bold">₹{Number(viewMember.balance_due || 0).toLocaleString('en-IN')}</span></div>
-            </div>
+        return (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-[#0B0F19] w-full max-w-md p-6 rounded-3xl border border-white/20 relative shadow-2xl space-y-4">
+              <button onClick={() => setViewMember(null)} className="absolute top-4 right-4 text-slate-400 hover:text-white text-base">✕</button>
+              
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 rounded-2xl bg-black/60 overflow-hidden border border-white/15 flex-shrink-0 flex items-center justify-center">
+                  {viewMember.photo_url ? (
+                    <img src={viewMember.photo_url} alt={viewMember.full_name} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="font-bold text-slate-500 text-xl">{(viewMember.full_name || '?').charAt(0)}</div>
+                  )}
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-white">{viewMember.full_name}</h3>
+                  <p className="text-xs text-slate-400 font-mono">#PF-{String(viewMember.id).padStart(5, '0')}</p>
+                  <span className="text-[10px] font-bold text-[#00F2FE] uppercase">{formatPlanLabel(viewMember.plan_type)}</span>
+                </div>
+              </div>
 
-            <button onClick={() => setViewMember(null)} className="w-full py-2.5 rounded-xl bg-white/10 text-white font-bold text-xs">
-              Close Profile
-            </button>
+              <div className="p-3.5 rounded-2xl bg-black/40 border border-white/5 space-y-2 text-xs">
+                <div className="flex justify-between"><span className="text-slate-400">Payment Channel:</span><span className="font-bold text-[#00F2FE]">{normalizeMode(viewMember.payment_mode)}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">Gender:</span><span className="text-white font-bold">{viewMember.gender || '—'}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">Date of Birth:</span><span className="text-white">{viewMember.dob ? formatDate(viewMember.dob) : '—'}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">Phone:</span><span className="font-mono text-white">{viewMember.phone}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">Email:</span><span className="text-white">{viewMember.email || '—'}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">Start Date:</span><span className="text-white">{formatDate(viewMember.start_date)}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">Expiry Date:</span><span className="text-amber-400 font-bold">{formatDate(viewMember.expiry_date)}</span></div>
+                
+                <div className="my-2 border-t border-white/10 pt-2 space-y-1.5">
+                  <div className="flex justify-between"><span className="text-slate-400">Standard Plan Fee:</span><span className="font-mono text-slate-300">₹{standardPlanFee.toLocaleString('en-IN')}</span></div>
+                  {discountVal > 0 && (
+                    <div className="flex justify-between"><span className="text-amber-400 font-bold">Discount Given:</span><span className="font-mono text-amber-300 font-bold">- ₹{discountVal.toLocaleString('en-IN')}</span></div>
+                  )}
+                  <div className="flex justify-between"><span className="text-slate-300 font-bold">Net Agreed Fee:</span><span className="font-mono text-white font-bold">₹{netAgreed.toLocaleString('en-IN')}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Amount Paid:</span><span className="font-mono text-emerald-400 font-bold">₹{paidVal.toLocaleString('en-IN')}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Remaining Balance:</span><span className={`font-mono font-bold ${dueVal > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>₹{dueVal.toLocaleString('en-IN')}</span></div>
+                </div>
+              </div>
+
+              <button onClick={() => setViewMember(null)} className="w-full py-2.5 rounded-xl bg-white/10 text-white font-bold text-xs">
+                Close Profile
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* REGISTER / EDIT MEMBER MODAL */}
       {isModalOpen && !isSuperAdmin && (
@@ -825,7 +916,7 @@ export default function Members() {
 
                 {/* Pricing & Discount */}
                 <div>
-                  <label className="block text-[10px] font-bold text-[#00F2FE] uppercase mb-1">Plan Standard Fee (Auto-Fetched ₹)</label>
+                  <label className="block text-[10px] font-bold text-[#00F2FE] uppercase mb-1">Standard Plan Fee (Auto-Fetched ₹)</label>
                   <input type="number" readOnly value={formData.base_price} className="w-full bg-black/60 border border-[#00F2FE]/40 px-3.5 py-2.5 rounded-xl text-xs text-[#00F2FE] font-bold font-mono outline-none" />
                 </div>
 
@@ -835,8 +926,8 @@ export default function Members() {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Net Agreed Fee (₹ INR) *</label>
-                  <input type="number" required value={formData.total_amount} className="w-full bg-black/40 border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none font-mono" onChange={(e) => setFormData({ ...formData, total_amount: e.target.value })} />
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Net Agreed Fee (After Discount ₹) *</label>
+                  <input type="number" required value={formData.total_amount} className="w-full bg-black/40 border border-white/15 px-3.5 py-2.5 rounded-xl text-xs text-white outline-none font-mono" onChange={(e) => setFormData({ ...formData, total_amount: e.target.value, amount_paid: e.target.value })} />
                 </div>
 
                 <div>

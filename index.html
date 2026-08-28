@@ -45,6 +45,30 @@
       "description": "Enterprise multi-tenant gym management software for membership lifecycles and fee dues tracking."
     }
     </script>
+    <!-- Performance Entry Guard for Browser Extensions & Web Vitals -->
+    <script>
+      (function() {
+        if (typeof window !== 'undefined' && window.performance) {
+          const originalGetEntriesByType = window.performance.getEntriesByType;
+          if (originalGetEntriesByType) {
+            window.performance.getEntriesByType = function(type) {
+              const entries = originalGetEntriesByType.call(window.performance, type);
+              if (type === 'navigation' && (!entries || entries.length === 0)) {
+                return [{
+                  startTime: 0,
+                  duration: 0,
+                  entryType: 'navigation',
+                  name: window.location.href,
+                  responseStart: 0,
+                  loadEventEnd: 0
+                }];
+              }
+              return entries || [];
+            };
+          }
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
